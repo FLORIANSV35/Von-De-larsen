@@ -47,6 +47,15 @@ cmake -S . -B build -DVDL_BUILD_PLUGIN=ON && cmake --build build --config Releas
 
 JUCE 8.0.4 est téléchargé automatiquement. Le plugin est copié dans `~/Library/Audio/Plug-Ins/`.
 
+## Application standalone multicanal (1 à 8 canaux)
+
+`VonDeLarsenApp` : choix de l'interface audio et du nombre de canaux (1–8, menu « Channels »). Le canal *i*
+en entrée devient le canal *i* en sortie, chacun avec son propre anti-larsen et débruiteur. Réglages
+partagés : sensibilité larsen, coupure max, réduction de bruit. La latence totale (plugin + interface
+audio) est affichée en direct. Compiler avec `-DVDL_BUILD_STANDALONE=ON` (activé par défaut sur macOS).
+Avec un modèle CoreML, chaque canal lance son propre thread d'inférence : 8 canaux = 8 × 375 inférences/s,
+à mesurer avec `bench_mask` avant de compter dessus.
+
 ## Activer le Neural Engine
 
 1. Générer un modèle de test (poids aléatoires, **uniquement pour mesurer la latence**) :
@@ -64,7 +73,7 @@ Contrat du modèle (float32) : entrée `features` [1,129] (puissance en dBFS par
 
 Vérifié sur Linux : tout le cœur DSP (`core/`, `tests/`).
 **Jamais compilé ni exécuté** (pas de Mac disponible lors de l'écriture) : `core/src/CoreMlMaskProvider.mm`,
-`plugin/` et `tools/make_placeholder_model.py`. Attendre quelques corrections au premier build.
+`plugin/`, `standalone/` et `tools/make_placeholder_model.py`. Attendre quelques corrections au premier build.
 
 À faire :
 - **Entraîner un vrai modèle de débruitage** (type DeepFilterNet/RNNoise réduit) respectant le contrat
