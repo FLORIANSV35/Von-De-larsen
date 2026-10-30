@@ -17,8 +17,17 @@ micro ─▶ FeedbackSuppressor ─▶ SpectralDenoiser ─▶ sortie
 | Bloc | Rôle | Latence |
 |---|---|---|
 | `FeedbackSuppressor` | Analyse FFT 1024 en parallèle (sans retarder l'audio) qui repère les pics étroits, persistants et croissants (ratio pic/voisins, rejet des signaux harmoniques = voix). Place jusqu'à 8 filtres notch (Q = 30, jusqu'à −18 dB par défaut) maintenus 10 s. | 0 |
-| `SpectralDenoiser` | Wiener à décision dirigée + suivi de minimum pour le bruit. Si un modèle CoreML est présent, son masque remplace le calcul classique. | 256 éch. |
+| `SpectralDenoiser` | Wiener à décision dirigée + suivi de minimum pour le bruit. Si un modèle CoreML est présent, son masque est **mélangé** au gain classique (moyenne géométrique, curseur « Neural share », 0 = classique seul). | 256 éch. |
 | `AsyncMaskProvider` | Boîtes aux lettres sans verrou entre le thread audio et le thread d'inférence. Un modèle lent ne bloque jamais l'audio : le plugin retombe sur le Wiener classique si le masque a plus de 4 hops. | 0 |
+
+### Mélange réseau + classique
+
+- **Bruit** : `g = g_wiener^(1-m) · g_réseau^m`. Le gain de Wiener est toujours calculé, donc si le réseau
+  est en retard ou absent on retombe sur le classique sans coupure.
+- **Larsen** : le détecteur classique reste seul décideur, mais le masque du réseau sert d'indice. Là où le
+  réseau dit « pas de la voix », les seuils baissent de 4 dB (réaction plus rapide). Là où il dit
+  « voix », ils montent de 3 dB. Un indice faux ne peut donc jamais empêcher un vrai larsen d'être coupé
+  (testé avec un indice figé à 0, 0,5 et 1).
 
 ### Pourquoi le Neural Engine est asynchrone
 

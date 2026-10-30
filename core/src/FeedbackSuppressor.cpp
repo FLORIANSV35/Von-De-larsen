@@ -94,6 +94,13 @@ void FeedbackSuppressor::analyze() noexcept
     strong_ = lerp(34.f, 24.f, s);
     growth_ = lerp(3.f, 1.5f, s);
 
+    // Threshold shift in dB for a 1024-grid bin, from the neural voice hint (4 bins per hint bin).
+    auto hintShift = [this](int k) {
+        if (!hint_) return 0.f;
+        const float h = hint_[std::min(k / 4, 128)];
+        return h < 0.3f ? -4.f : h > 0.7f ? 3.f : 0.f;
+    };
+
     std::fill(cand_.begin(), cand_.end(), 0);
     for (int k = kLo_; k <= kHi_; ++k) {
         const size_t i = static_cast<size_t>(k);
@@ -102,7 +109,7 @@ void FeedbackSuppressor::analyze() noexcept
         for (int d = 3; d <= 8; ++d) sum += pw_[static_cast<size_t>(k - d)] + pw_[static_cast<size_t>(k + d)];
         const float nb_db = 10.0f * std::log10(sum / 12.0f + 1e-12f);
         pnpr_[i] = lv_[i] - nb_db;
-        if (pnpr_[i] >= kRelatedPeakDb) cand_[i] = pnpr_[i] >= thr_ ? 2 : 1; // 1: weak peak (harmonic check only), 2: candidate
+        if (pnpr_[i] >= kRelatedPeakDb) cand_[i] = pnpr_[i] >= thr_ + hintShift(k) ? 2 : 1; // 1: weak peak (harmonic check only), 2: candidate
     }
 
     for (int k = kLo_; k <= kHi_; ++k) {
@@ -117,7 +124,7 @@ void FeedbackSuppressor::analyze() noexcept
             miss_[i] = 0;
             if (persist_[i] >= persistFrames_) {
                 const bool growing = refAge_[i] >= persistFrames_ / 2 && (lv_[i] - lvl0_[i]) >= growth_;
-                if ((growing || pnpr_[i] >= strong_) && !looksHarmonic(k)) detected(k);
+                if ((growing || pnpr_[i] >= strong_ + hintShift(k)) && !looksHarmonic(k)) detected(k);
             }
         } else if (persist_[i] > 0 && ++miss_[i] > 2) {
             persist_[i] = miss_[i] = refAge_[i] = 0;

@@ -41,6 +41,7 @@ public:
         setupSlider(sens_, sensLabel_, "Feedback sensitivity", 0.0, 1.0, 0.5);
         setupSlider(cut_, cutLabel_, "Feedback max cut (dB)", 6.0, 30.0, 18.0);
         setupSlider(nr_, nrLabel_, "Noise reduction (dB)", 0.0, 30.0, 15.0);
+        setupSlider(mix_, mixLabel_, "Neural share (0 = classic only)", 0.0, 1.0, 0.7);
         addAndMakeVisible(neural_);
         neural_.setButtonText("Neural Engine mask (needs model)");
         neural_.setToggleState(true, juce::dontSendNotification);
@@ -78,9 +79,9 @@ public:
         channelsLabel_.setBounds(row.removeFromLeft(160));
         channels_.setBounds(row.removeFromLeft(80));
         r.removeFromTop(8);
-        for (auto* pair : { &sens_, &cut_, &nr_ }) {
+        for (auto* pair : { &sens_, &cut_, &nr_, &mix_ }) {
             auto s = r.removeFromTop(28);
-            (pair == &sens_ ? sensLabel_ : pair == &cut_ ? cutLabel_ : nrLabel_).setBounds(s.removeFromLeft(180));
+            (pair == &sens_ ? sensLabel_ : pair == &cut_ ? cutLabel_ : pair == &nr_ ? nrLabel_ : mixLabel_).setBounds(s.removeFromLeft(220));
             pair->setBounds(s);
         }
         neural_.setBounds(r.removeFromTop(28));
@@ -97,6 +98,7 @@ private:
             pSens_.store(static_cast<float>(sens_.getValue()));
             pCut_.store(static_cast<float>(cut_.getValue()));
             pNr_.store(static_cast<float>(nr_.getValue()));
+            pMix_.store(static_cast<float>(mix_.getValue()));
         };
         l.setText(name, juce::dontSendNotification);
         addAndMakeVisible(s);
@@ -156,6 +158,8 @@ private:
             ch.feedback.setSensitivity(sens);
             ch.feedback.setMaxCutDb(cut);
             ch.denoiser.setReductionDb(nr);
+            ch.denoiser.setNeuralMix(pMix_.load());
+            ch.feedback.setVoiceHint(ch.denoiser.neuralMask());
             if (!useNn && ch.mask) ch.denoiser.setMaskProvider(nullptr);
             else if (useNn && ch.mask) ch.denoiser.setMaskProvider(ch.mask.get());
             juce::FloatVectorOperations::copy(o, in[c], numSamples);
@@ -185,14 +189,14 @@ private:
 
     juce::AudioDeviceManager deviceManager_;
     std::unique_ptr<juce::AudioDeviceSelectorComponent> selector_;
-    juce::Label channelsLabel_, sensLabel_, cutLabel_, nrLabel_, status_;
+    juce::Label channelsLabel_, sensLabel_, cutLabel_, nrLabel_, mixLabel_, status_;
     juce::ComboBox channels_;
-    juce::Slider sens_, cut_, nr_;
+    juce::Slider sens_, cut_, nr_, mix_;
     juce::ToggleButton neural_;
 
     std::array<Channel, kMaxChannels> ch_;
     std::atomic<int> active_ { 2 };
-    std::atomic<float> pSens_ { 0.5f }, pCut_ { 18.f }, pNr_ { 15.f };
+    std::atomic<float> pSens_ { 0.5f }, pCut_ { 18.f }, pNr_ { 15.f }, pMix_ { 0.7f };
     std::atomic<bool> pNeural_ { true };
     int lastActive_ = 0; // audio thread only
 };

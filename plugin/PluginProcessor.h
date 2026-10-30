@@ -52,6 +52,7 @@ private:
     std::atomic<float>* maxCut_ = nullptr;
     std::atomic<float>* nr_ = nullptr;
     std::atomic<float>* nn_ = nullptr;
+    std::atomic<float>* mix_ = nullptr;
     double fs_ = 48000;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(VonDeLarsenProcessor)

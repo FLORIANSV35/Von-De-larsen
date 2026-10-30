@@ -28,6 +28,12 @@ public:
     void setSensitivity(float s01) { sens_.store(s01, std::memory_order_relaxed); }
     void setMaxCutDb(float db) { maxCut_.store(db, std::memory_order_relaxed); }
 
+    // Optional hint from a neural voice mask (129 gains, 0 = noise/tone, 1 = voice), indexed on the
+    // 256-point grid. Where it says "not voice" the detector reacts sooner; where it says "voice" it is
+    // slightly more cautious. It only shifts thresholds, so a wrong hint can never block a real howl.
+    // The pointer must stay valid until the next process() call. nullptr clears it.
+    void setVoiceHint(const float* mask129) noexcept { hint_ = mask129; }
+
     void process(float* x, int n) noexcept; // in place, 0 samples of latency
 
     int activeNotches() const;
@@ -54,6 +60,7 @@ private:
     long frame_ = 0;
     int wr_ = 0, hopCount_ = 0;
     std::atomic<float> sens_ { 0.5f }, maxCut_ { 18.0f };
+    const float* hint_ = nullptr;
     float thr_ = 18, strong_ = 30, growth_ = 2;
 
     std::vector<float> ring_, win_, pw_, lv_, pnpr_;

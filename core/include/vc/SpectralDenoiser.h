@@ -28,10 +28,15 @@ public:
     void reset();
 
     void setReductionDb(float db); // maximum attenuation, 0..40 dB (thread-safe)
+    // Share of the neural mask in the final gain, 0..1 (thread-safe). The gain is a
+    // geometric blend  g = g_wiener^(1-mix) * g_neural^mix, so 0 = classic only.
+    void setNeuralMix(float mix) { mix_.store(mix, std::memory_order_relaxed); }
     void setMaskProvider(IMaskProvider* p) { provider_ = p; } // call while not processing
 
     int latencySamples() const { return kN; }
     bool usingNeuralMask() const { return usingNn_.load(std::memory_order_relaxed); }
+    // Latest neural mask (129 gains) if fresh, else nullptr. Audio thread only; valid until the next process().
+    const float* neuralMask() const { return haveFresh_ ? nn_.data() : nullptr; }
 
     void process(const float* in, float* out, int n) noexcept; // in == out allowed
 
@@ -42,7 +47,9 @@ private:
     double fs_ = 48000;
     float rise_ = 1.001f;
     std::atomic<float> gMin_ { 0.178f };
+    std::atomic<float> mix_ { 0.7f };
     std::atomic<bool> usingNn_ { false };
+    bool haveFresh_ = false;
     IMaskProvider* provider_ = nullptr;
 
     std::vector<float> hist_, win_, acc_, outBlock_;

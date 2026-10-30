@@ -164,6 +164,88 @@ void testSimultaneousNotches()
     }
 }
 
+// Constant-mask provider whose value is chosen by the test.
+class ConstProvider : public vc::AsyncMaskProvider {
+public:
+    explicit ConstProvider(float v) : AsyncMaskProvider(vc::SpectralDenoiser::kBins), v_(v) { start(); }
+    ~ConstProvider() override { stop(); }
+protected:
+    bool infer(const float*, float* m) override
+    {
+        for (int i = 0; i < vc::SpectralDenoiser::kBins; ++i) m[i] = v_;
+        return true;
+    }
+private:
+    float v_;
+};
+
+double noiseOnlyRmsDb(float nnValue, float mix)
+{
+    ConstProvider p(nnValue);
+    vc::SpectralDenoiser dn;
+    dn.prepare(kFs);
+    dn.setReductionDb(30);
+    dn.setNeuralMix(mix);
+    if (mix >= 0) dn.setMaskProvider(&p);
+    std::mt19937 rng(5);
+    std::normal_distribution<float> nd(0.f, 0.05f);
+    std::vector<float> x(static_cast<size_t>(kFs * 2)), y(x.size());
+    for (auto& v : x) v = nd(rng);
+    double e = 0;
+    int cnt = 0;
+    for (size_t i = 0; i + 128 <= x.size(); i += 128) {
+        dn.process(&x[i], &y[i], 128);
+        std::this_thread::sleep_for(std::chrono::microseconds(300));
+        if (i > x.size() / 2) for (size_t j = i; j < i + 128; ++j) { e += y[j] * y[j]; ++cnt; }
+    }
+    return db(e / cnt);
+}
+
+void testHybridMix()
+{
+    // Noise only. The classic Wiener gain removes most of it; a network that says "voice" (mask = 1) keeps it.
+    const double inputDb = db(0.05 * 0.05);
+    const double classic = noiseOnlyRmsDb(1.0f, 0.0f);
+    const double half = noiseOnlyRmsDb(1.0f, 0.5f);
+    const double full = noiseOnlyRmsDb(1.0f, 1.0f);
+    check(classic < inputDb - 6.0, "hybrid: classic path removes noise (dB below input)", classic - inputDb);
+    check(classic < half && half < full, "hybrid: output level rises monotonically with neural share (dB)", half - classic);
+    check(std::fabs(full - inputDb) < 1.5, "hybrid: mix 1 follows the neural mask (dB vs input)", full - inputDb);
+    const double ignored = noiseOnlyRmsDb(0.1f, 0.0f);
+    check(std::fabs(ignored - classic) < 0.5, "hybrid: mix 0 ignores the neural mask (dB diff)", ignored - classic);
+}
+
+void testHintCannotBlockHowl()
+{
+    const std::vector<double> res = { 1500 };
+    for (float h : { 0.0f, 0.5f, 1.0f }) {
+        // run the loop with a fixed voice hint on the suppressor
+        const int blk = 64, delay = 480, total = static_cast<int>(kFs * 8);
+        vc::FeedbackSuppressor fb;
+        fb.prepare(kFs);
+        std::vector<float> hint(129, h);
+        fb.setVoiceHint(hint.data());
+        Room room(1500, 8, 1.4);
+        std::mt19937 rng(3);
+        std::normal_distribution<float> nd(0.f, 0.001f);
+        std::vector<float> spk(static_cast<size_t>(total + delay), 0.f), mic(blk);
+        double e = 0;
+        int cnt = 0;
+        for (int b = 0; b < total; b += blk) {
+            for (int i = 0; i < blk; ++i) mic[static_cast<size_t>(i)] = nd(rng) + room.process(spk[static_cast<size_t>(b + i)]);
+            fb.process(mic.data(), blk);
+            for (int i = 0; i < blk; ++i) {
+                const float o = std::clamp(mic[static_cast<size_t>(i)], -1.f, 1.f);
+                spk[static_cast<size_t>(b + i + delay)] = o;
+                if (b + i >= total - static_cast<int>(kFs)) { e += static_cast<double>(o) * o; ++cnt; }
+            }
+        }
+        char msg[96];
+        std::snprintf(msg, sizeof msg, "howl still suppressed with voice hint = %.1f (tail dBFS)", h);
+        check(db(e / cnt) < -40, msg, db(e / cnt));
+    }
+}
+
 void testVoiceNotTouched()
 {
     for (double f0 : { 110.0, 220.0, 440.0 }) {
@@ -216,6 +298,8 @@ int main()
     testDenoise();
     testFeedback();
     testSimultaneousNotches();
+    testHybridMix();
+    testHintCannotBlockHowl();
     testVoiceNotTouched();
     testAsyncMask();
     std::printf(failures ? "\n%d FAILED\n" : "\nall passed\n", failures);

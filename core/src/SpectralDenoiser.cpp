@@ -79,6 +79,8 @@ void SpectralDenoiser::runFrame() noexcept
         useNn = nnAge_ <= kMaxStaleHops;
     }
     usingNn_.store(useNn, std::memory_order_relaxed);
+    haveFresh_ = useNn;
+    const float mix = useNn ? std::clamp(mix_.load(std::memory_order_relaxed), 0.f, 1.f) : 0.f;
 
     for (int k = 0; k < kBins; ++k) {
         const size_t i = static_cast<size_t>(k);
@@ -88,14 +90,10 @@ void SpectralDenoiser::runFrame() noexcept
         pn_[i] = ps_[i] < pn_[i] ? ps_[i] : pn_[i] * rise_;
         const float noise = std::max(pn_[i] * kNoiseBias, 1e-12f);
 
-        float g;
-        if (useNn) {
-            g = nn_[i];
-        } else {
-            const float gamma = p / noise;
-            const float xi = std::max(kDdAlpha * prevClean_[i] / noise + (1.f - kDdAlpha) * std::max(gamma - 1.f, 0.f), 1e-3f);
-            g = xi / (1.f + xi);
-        }
+        const float gamma = p / noise;
+        const float xi = std::max(kDdAlpha * prevClean_[i] / noise + (1.f - kDdAlpha) * std::max(gamma - 1.f, 0.f), 1e-3f);
+        float g = xi / (1.f + xi); // classic Wiener gain, always computed: it keeps the noise tracker honest
+        if (mix > 0.f) g = std::exp((1.f - mix) * std::log(g) + mix * std::log(std::max(nn_[i], 1e-4f)));
         g = std::clamp(g, gMin, 1.f);
         prevClean_[i] = g * g * p;
         gain_[i] = g;

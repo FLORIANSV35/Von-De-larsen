@@ -19,6 +19,7 @@ VonDeLarsenProcessor::VonDeLarsenProcessor()
     maxCut_ = apvts.getRawParameterValue("fbCut");
     nr_ = apvts.getRawParameterValue("nrAmount");
     nn_ = apvts.getRawParameterValue("nnEnable");
+    mix_ = apvts.getRawParameterValue("nnMix");
 }
 
 VonDeLarsenProcessor::~VonDeLarsenProcessor()
@@ -40,6 +41,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout VonDeLarsenProcessor::create
     l.add(std::make_unique<AudioParameterFloat>(ParameterID { "nrAmount", 1 }, "Noise reduction (dB)",
                                                 NormalisableRange<float>(0.f, 30.f), 15.f));
     l.add(std::make_unique<AudioParameterBool>(ParameterID { "nnEnable", 1 }, "Neural Engine mask", true));
+    l.add(std::make_unique<AudioParameterFloat>(ParameterID { "nnMix", 1 }, "Neural share (0 = classic only)",
+                                                NormalisableRange<float>(0.f, 1.f), 0.7f));
     return l;
 }
 
@@ -85,8 +88,10 @@ void VonDeLarsenProcessor::processBlock(juce::AudioBuffer<float>& buf, juce::Mid
         ch.feedback.setMaxCutDb(maxCut_->load());
         ch.denoiser.setReductionDb(nr_->load());
         ch.denoiser.setMaskProvider(useNn ? ch.mask.get() : nullptr);
+        ch.denoiser.setNeuralMix(mix_->load());
 
         float* x = buf.getWritePointer(c);
+        ch.feedback.setVoiceHint(ch.denoiser.neuralMask()); // neural voice/noise hint steers the howl detector
         ch.feedback.process(x, n);            // howl first: it must see the raw mic signal
         ch.denoiser.process(x, x, n);
     }
