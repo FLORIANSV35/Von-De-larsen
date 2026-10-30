@@ -107,21 +107,22 @@ struct Room {
     }
 };
 
-struct LoopResult { double tailDb; int notches; double freq; };
+struct LoopResult { double tailDb; int notches; double freq; std::vector<double> freqs; };
 
-LoopResult runLoop(bool suppress)
+LoopResult runLoop(bool suppress, std::vector<double> freqs = { 1500 })
 {
     const int blk = 64, delay = 480, total = static_cast<int>(kFs * 8);
     vc::FeedbackSuppressor fb;
     fb.prepare(kFs);
-    Room room(1500, 8, 1.4);
+    std::vector<Room> rooms;
+    for (double f : freqs) rooms.emplace_back(f, 8, 1.4);
     std::mt19937 rng(3);
     std::normal_distribution<float> nd(0.f, 0.001f); // -60 dBFS noise floor seeds the howl
     std::vector<float> spk(static_cast<size_t>(total + delay), 0.f), mic(blk), outTail;
     double e = 0;
     int cnt = 0;
     for (int b = 0; b < total; b += blk) {
-        for (int i = 0; i < blk; ++i) mic[static_cast<size_t>(i)] = nd(rng) + room.process(spk[static_cast<size_t>(b + i)]);
+        for (int i = 0; i < blk; ++i) mic[static_cast<size_t>(i)] = nd(rng) + [&] { float a = 0; for (auto& r : rooms) a += r.process(spk[static_cast<size_t>(b + i)]); return a; }();
         if (suppress) fb.process(mic.data(), blk);
         for (int i = 0; i < blk; ++i) {
             const float o = std::clamp(mic[static_cast<size_t>(i)], -1.f, 1.f);
@@ -130,9 +131,10 @@ LoopResult runLoop(bool suppress)
         }
     }
     double f = 0;
+    std::vector<double> all;
     for (int s = 0; s < vc::FeedbackSuppressor::kMaxNotches; ++s)
-        if (fb.notchCutDb(s) > 0) f = fb.notchFrequency(s);
-    return { db(e / cnt), fb.activeNotches(), f };
+        if (fb.notchCutDb(s) > 0) { f = fb.notchFrequency(s); all.push_back(f); }
+    return { db(e / cnt), fb.activeNotches(), f, all };
 }
 
 void testFeedback()
@@ -143,6 +145,23 @@ void testFeedback()
     check(on.tailDb < -40, "loop with suppressor stays quiet (tail dBFS)", on.tailDb);
     check(on.notches >= 1 && on.notches <= 3, "few notches used (count)", on.notches);
     check(std::fabs(on.freq - 1500) < 400, "notch lands near the resonance (Hz)", on.freq);
+}
+
+void testSimultaneousNotches()
+{
+    const std::vector<double> res = { 900, 2400, 5200 };
+    const auto off = runLoop(false, res);
+    const auto on = runLoop(true, res);
+    check(off.tailDb > -20, "3 resonances: howls without suppressor (tail dBFS)", off.tailDb);
+    check(on.tailDb < -40, "3 resonances: quiet with suppressor (tail dBFS)", on.tailDb);
+    check(on.notches >= 3 && on.notches <= 5, "3 resonances: notches active at the same time (count)", on.notches);
+    for (double r : res) {
+        bool found = false;
+        for (double f : on.freqs) found = found || std::fabs(f - r) < 150;
+        char msg[64];
+        std::snprintf(msg, sizeof msg, "a notch sits on the %.0f Hz resonance", r);
+        check(found, msg);
+    }
 }
 
 void testVoiceNotTouched()
@@ -196,6 +215,7 @@ int main()
     testReconstructionAndLatency();
     testDenoise();
     testFeedback();
+    testSimultaneousNotches();
     testVoiceNotTouched();
     testAsyncMask();
     std::printf(failures ? "\n%d FAILED\n" : "\nall passed\n", failures);
