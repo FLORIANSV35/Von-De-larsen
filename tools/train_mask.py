@@ -37,37 +37,63 @@ WIN = torch.sin(math.pi * torch.arange(N) / N)
 
 # --------------------------------------------------------------------------- model
 class MaskNet(nn.Module):
-    """Training form: whole sequences. features [B,T,129] -> mask [B,T,129]."""
+    """Training form: whole sequences. features [B,T,129] -> mask [B,T,129]. `layers` stacked GRUs of `hidden` units."""
 
-    def __init__(self):
+    def __init__(self, hidden=HIDDEN, layers=1):
         super().__init__()
-        self.inp = nn.Linear(BINS, HIDDEN)
-        self.gru = nn.GRU(HIDDEN, HIDDEN, batch_first=True)
-        self.out = nn.Linear(HIDDEN, BINS)
+        self.hidden, self.layers = hidden, layers
+        self.inp = nn.Linear(BINS, hidden)
+        self.grus = nn.ModuleList([nn.GRU(hidden, hidden, batch_first=True) for _ in range(layers)])
+        self.out = nn.Linear(hidden, BINS)
 
     def forward(self, f):
         x = torch.relu(self.inp((f + 60.0) / 60.0))
-        h, _ = self.gru(x)
-        return torch.sigmoid(self.out(h))
+        for g in self.grus:
+            x, _ = g(x)
+        return torch.sigmoid(self.out(x))
+
+
+def load_weights(net, path):
+    """Load a saved state dict; weights saved before the model had several layers use `gru.` instead of `grus.0.`."""
+    state = torch.load(path, map_location="cpu")
+    state = {k.replace("gru.", "grus.0.", 1) if k.startswith("gru.") else k: v for k, v in state.items()}
+    net.load_state_dict(state)
+    return net
 
 
 class StepNet(nn.Module):
-    """Inference form exported to CoreML: one frame, explicit recurrent state."""
+    """Inference form exported to CoreML: one frame, explicit recurrent state (the layers' states side by side).
+
+    The GRU cells are written out by hand (same gate order r, z, n as torch.nn.GRU) because
+    nn.GRUCell is traced to ops (unsafe_chunk) that coremltools cannot convert.
+    """
 
     def __init__(self, net):
         super().__init__()
         self.inp, self.out = net.inp, net.out
-        self.cell = nn.GRUCell(HIDDEN, HIDDEN)
-        g = net.gru
-        self.cell.weight_ih.data.copy_(g.weight_ih_l0)
-        self.cell.weight_hh.data.copy_(g.weight_hh_l0)
-        self.cell.bias_ih.data.copy_(g.bias_ih_l0)
-        self.cell.bias_hh.data.copy_(g.bias_hh_l0)
+        self.hidden, self.layers = net.hidden, net.layers
+        for i, g in enumerate(net.grus):
+            self.register_buffer(f"w_ih{i}", g.weight_ih_l0.detach().clone())
+            self.register_buffer(f"w_hh{i}", g.weight_hh_l0.detach().clone())
+            self.register_buffer(f"b_ih{i}", g.bias_ih_l0.detach().clone())
+            self.register_buffer(f"b_hh{i}", g.bias_hh_l0.detach().clone())
 
     def forward(self, features, state_in):
+        H = self.hidden
         x = torch.relu(self.inp((features + 60.0) / 60.0))
-        h = self.cell(x, state_in)
-        return torch.sigmoid(self.out(h)), h
+        new_states = []
+        for i in range(self.layers):
+            h = state_in[:, i * H : (i + 1) * H]
+            gi = x @ getattr(self, f"w_ih{i}").t() + getattr(self, f"b_ih{i}")
+            gh = h @ getattr(self, f"w_hh{i}").t() + getattr(self, f"b_hh{i}")
+            r = torch.sigmoid(gi[:, 0:H] + gh[:, 0:H])
+            z = torch.sigmoid(gi[:, H : 2 * H] + gh[:, H : 2 * H])
+            n = torch.tanh(gi[:, 2 * H : 3 * H] + r * gh[:, 2 * H : 3 * H])
+            h = (1.0 - z) * n + z * h
+            new_states.append(h)
+            x = h
+        state_out = torch.cat(new_states, dim=1) if len(new_states) > 1 else new_states[0]
+        return torch.sigmoid(self.out(x)), state_out
 
 
 # --------------------------------------------------------------------------- audio
@@ -164,6 +190,8 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--out", default="out/denoise.mlpackage")
     ap.add_argument("--demo", action="store_true", help="synthetic data only, pipeline check")
+    ap.add_argument("--hidden", type=int, default=HIDDEN, help="GRU units per layer")
+    ap.add_argument("--layers", type=int, default=1, help="stacked GRU layers (the high CPU model uses 2)")
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
     if not a.demo and not a.speech:
@@ -179,7 +207,8 @@ def main():
     noise = load_files(a.noise) if a.noise else None
     print(f"speech files: {len(speech) if speech else 'synthetic'}, noise files: {len(noise) if noise else 'synthetic'}")
 
-    net = MaskNet().to(dev)
+    os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
+    net = MaskNet(a.hidden, a.layers).to(dev)
     opt = torch.optim.AdamW(net.parameters(), lr=a.lr)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, a.steps)
 
@@ -199,9 +228,9 @@ def main():
         if step % 200 == 0 or step == 1:
             print(f"step {step}/{a.steps} loss {loss.item():.5f}")
         if step % 5000 == 0:
-            torch.save(net.state_dict(), "mask_net.pt")
+            torch.save(net.state_dict(), os.path.splitext(a.out)[0] + ".pt")
 
-    torch.save(net.state_dict(), "mask_net.pt")
+    torch.save(net.state_dict(), os.path.splitext(a.out)[0] + ".pt")
     export(net.cpu().eval(), a.out)
 
 
@@ -209,14 +238,15 @@ def export(net, path):
     import coremltools as ct
 
     step = StepNet(net).eval()
-    ex = (torch.zeros(1, BINS), torch.zeros(1, HIDDEN))
+    S = net.hidden * net.layers
+    ex = (torch.zeros(1, BINS), torch.zeros(1, S))
     traced = torch.jit.trace(step, ex)
     model = ct.convert(
         traced,
         convert_to="mlprogram",
         minimum_deployment_target=ct.target.macOS13,
         compute_precision=ct.precision.FLOAT16,
-        inputs=[ct.TensorType(name="features", shape=(1, BINS)), ct.TensorType(name="state_in", shape=(1, HIDDEN))],
+        inputs=[ct.TensorType(name="features", shape=(1, BINS)), ct.TensorType(name="state_in", shape=(1, S))],
         outputs=[ct.TensorType(name="mask"), ct.TensorType(name="state_out")],
     )
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -224,7 +254,7 @@ def export(net, path):
     print("saved", path)
 
     # step-by-step must equal the sequence model (also checks the CoreML output on macOS)
-    h, outs = torch.zeros(1, HIDDEN), []
+    h, outs = torch.zeros(1, S), []
     torch.manual_seed(1)
     feats = torch.randn(1, 6, BINS) * 20 - 40
     seq = net(feats).detach()
@@ -235,7 +265,7 @@ def export(net, path):
     print(f"torch step-vs-sequence max error: {err:.2e}")
     assert err < 1e-4
     try:
-        h = np.zeros((1, HIDDEN), np.float32)
+        h = np.zeros((1, S), np.float32)
         worst = 0.0
         for t in range(6):
             r = model.predict({"features": feats[:, t].numpy(), "state_in": h})
