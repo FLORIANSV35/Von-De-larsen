@@ -1,7 +1,10 @@
 add_library(vc_core STATIC
     src/FeedbackSuppressor.cpp
     src/SpectralDenoiser.cpp
-    src/AsyncMaskProvider.cpp)
+    src/AsyncMaskProvider.cpp
+    src/AutoMixer.cpp
+    src/BypassMixer.cpp
+    src/FeedbackCanceller.cpp)
 target_include_directories(vc_core PUBLIC include)
 target_compile_features(vc_core PUBLIC cxx_std_17)
 find_package(Threads REQUIRED)
