@@ -206,15 +206,21 @@ d'échantillonnage). Validation hors dépôt (`learn_real.cpp`) : vraie parole +
 À faire : un apprentissage de la voix de l'orateur (profil de spectre et de pente) pour rouvrir la voie rapide sans faux
 déclenchement ; marge réglable ; afficher le gain atteint sur la bande.
 
-**Mode High CPU : refait, réduit à la latence.** L'utilisateur voulait un mode lourd pour tout le plugin, gagnant en latence ET en
-qualité. L'annuleur de retour (seul gain de qualité mesuré) demandait un bruit de mesure dans la sono, refusé pour « Apprendre la
-salle » : retiré (`FeedbackCanceller` reste dans `core/`, testé, non branché). Le bouton `highCpu` est revenu avec un autre
-contenu : `SpectralDenoiser::setLowLatency` (fenêtre 128, pas 32, latence 128 échantillons = 2,7 ms). Gain de latence réel et
-vérifié (bypass aligné au bit près à chaud) ; **pas de gain de qualité** : avec le réseau −0,1 à −1,1 dB de SI-SDR, en classique
-seul −1,5 à −3 dB (voir README, section High CPU). Essayés sans succès : lissage des gains en fréquence, gains calculés sur la
-fenêtre longue puis appliqués à la trame courte (désalignés de 64 échantillons, pire). Banc de mesure (hors dépôt) : parole `say`
-+ bruit, SI-SDR contre la parole propre. Restent l'indicateur de charge (`cpuLoad`) et `tools/train_mask.py --hidden --layers`.
-Pour gagner aussi en qualité il faudrait un modèle entraîné pour fenêtre de 128, ce qui reste à faire.
+**Pas de baisse de niveau automatique (v0.2.4).** Demande de l'utilisateur après une perte de niveau constatée. Mesure (sonde VST3,
+`speechgain`) : le gain sur la parole dépendait du niveau d'entrée (−0,6 dB à −15 dBFS, −8 dB à −45 dBFS) parce que le modèle
+neuronal n'a vu que des crêtes de −20 à −1 dBFS à l'entraînement : normalisation de son entrée (`nnLiftDb`) → −0,6 à −1,4 dB
+partout. Porte vocale éteinte par défaut, frein anti-larsen derrière un bouton (éteint par défaut), réduction aux aigus (> 3 kHz)
+limitée à la moitié de la profondeur. Un filtre à phase minimale fausse la mesure de gain par projection sur la forme d'onde
+(décalage de phase par fréquence) : utiliser `|Σ Y·C*|` par bande. Essai : cepstre sur FFT de 1024 au lieu de 256, pas d'effet sur
+la perte d'aigus du mode latence 0 (elle vient du retard des gains), conservé.
+Attention : l'état de l'application autonome (`~/Library/VonDeLarsen/standalone.xml`) garde la porte vocale allumée si elle l'était.
+
+**Mode High CPU : latence zéro (v0.2.3).** Le bouton `highCpu` pilote `SpectralDenoiser::setZeroLatency` : gains estimés comme en mode
+normal, appliqués par un filtre à phase minimale de 160 coefficients (cepstre) sur les échantillons courants, latence 0 à 2 échantillons.
+Qualité en SNR de module équivalente au mode normal (voir README). Il remplace la première version (fenêtre de 128, 2,7 ms, plus faible,
+encore dans le code sous `setLowLatency`). Banc : parole `say` + bruit, SNR de module (phase ignorée) et SI-SDR ; sonde VST3
+`tools/plugin_probe` pour la latence et les boucles de larsen. L'annuleur de retour (`FeedbackCanceller`) reste dans `core/`, non branché.
+À faire : écouter le résultat (le décalage de phase ne se mesure pas avec nos métriques), robustesse du larsen en boucle très forte.
 Ce qui a été essayé et mesuré (à ne pas refaire) :
 - recouvrement de 75 % du débruiteur (hop 64) : aucun gain, le double de calcul ;
 - gros modèle `--hidden 256 --layers 2`, 1 800 pas, ~40 min : même erreur retirée que le petit sur les bruits synthétiques ;

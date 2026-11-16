@@ -1,7 +1,7 @@
 # Von De Larsen
 
 Plugin vocal (AU + VST3, macOS Apple Silicon) : **anti-larsen** et **réduction de bruit de fond**,
-pensé pour la voix en sono live. Latence totale du plugin : **5,3 ms à 48 kHz** (**2,7 ms** en mode High CPU, objectif ≤ 10 ms).
+pensé pour la voix en sono live. Latence totale du plugin : **5,3 ms à 48 kHz** (**0 ms** en mode High CPU, objectif ≤ 10 ms).
 
 ## Installer (macOS Apple Silicon)
 
@@ -136,6 +136,9 @@ Les tests couvrent : reconstruction parfaite et latence, gain de SNR, boucle de 
 (−1 dBFS sans plugin → −60 dBFS avec), absence de faux positifs sur voix soutenue (110/220/440 Hz) et
 boîte aux lettres asynchrone.
 
+Pour mesurer un plugin VST3 comme une boîte noire (latence, niveau, comportement dans une boucle qui siffle), voir
+`tools/plugin_probe/README.md`.
+
 ## Compiler le plugin (macOS, Apple Silicon)
 
 ```sh
@@ -159,36 +162,73 @@ Avec un modèle CoreML, chaque canal lance son propre thread d'inférence : 8 ca
 ## Porte vocale
 
 Comme le plugin ne traite que la voix, une porte baisse le son quand personne ne parle (réglages « Porte vocale »
-et « Affaiblissement sans voix », 0 à 40 dB, 12 dB par défaut). Une fois par hop, `SpectralDenoiser` juge la bande
-vocale (~190 Hz à 3,9 kHz) : avec le réseau, il regarde la moyenne du masque pondérée par l'énergie (voix ≈ 0,85,
-bruit seul ≈ 0,01 à 0,05 sur le modèle installé) ; sans réseau, il compare l'énergie au plancher de bruit suivi
-(seuil entre 1,5 et 7,5 dB). La porte s'ouvre aussitôt, attend 350 ms, puis se ferme en 200 ms avec une rampe sans
+et « Affaiblissement sans voix », 0 à 40 dB, 12 dB ; **éteinte par défaut**). Une fois par hop, `SpectralDenoiser` juge la bande
+vocale (~190 Hz à 3,9 kHz) : elle doit dépasser de 1,5 à 7,5 dB le plancher de bruit suivi, un rapport qui ne dépend pas du
+niveau d'entrée. Le masque du réseau n'a qu'une petite voix (un quart du score, jamais assez pour ouvrir la porte seul) :
+mesuré, le vrai modèle prend un bruit faible et stable pour du signal propre et répond « voix » dans 86 à 99 % des pauses.
+La porte s'ouvre aussitôt, attend 350 ms, puis se ferme en 200 ms avec une rampe sans
 clic. Elle n'ajoute aucune latence : le détecteur voit 5 ms d'avance sur la sortie. Fermer la porte baisse aussi le
 gain de boucle, donc les risques de larsen. Le voyant « VOIX / SILENCE » montre l'état.
 
 Limite : un chant tenu très pur, ou une pause de plus d'une demi-seconde en pleine phrase, peut fermer la porte.
 Les silences courts entre deux mots ne la ferment pas (350 ms de maintien).
 
-## High CPU (latence mini)
+## High CPU (latence zéro)
 
-Bouton « HIGH CPU » sous le curseur ciseau/cerveau (paramètre `highCpu`, éteint par défaut). Il raccourcit la fenêtre
-d'analyse du débruiteur de 256 à 128 échantillons (rembourrée à zéro jusqu'à la FFT de 256) et le pas de 128 à 32 :
-la **latence passe de 5,3 ms à 2,7 ms** (chiffre affiché sur le bouton, annoncé à l'hôte), le filtrage tourne 4 fois
-plus souvent. Le réseau neuronal garde son rythme d'entraînement : il voit toujours une fenêtre de 256 toutes les
-128 échantillons, et son dernier masque s'applique à chaque trame courte. Le bypass reste aligné au bit près (test
-`VonDeLarsenPreview x highcpu`). Le détecteur de larsen n'est pas concerné (il n'ajoute aucune latence).
+Bouton « HIGH CPU » sous le curseur ciseau/cerveau (paramètre `highCpu`, éteint par défaut). Il supprime la latence du
+débruiteur : **5,3 ms éteint, 0 ms allumé** (le chiffre est sur le bouton et annoncé à l'hôte).
 
-**Ce que ça ne fait pas : améliorer la qualité.** Mesuré sur de la parole synthétique (`say`) avec bruit rose ou blanc
-à −30..−40 dBFS, en SI-SDR contre la parole propre : avec le réseau, High CPU perd 0,1 à 1,1 dB par rapport au mode
-normal (+2,5 à +3,2 dB gagnés contre +3,0 à +3,9 dB) ; en classique seul, il perd 1,5 à 3 dB, la fenêtre courte
-distinguant mal la voix du bruit. Le bruit des pauses baisse un peu plus (1 dB). C'est le compromis de la physique
-(latence contre résolution en fréquence) : on a essayé le lissage des gains en fréquence et le calcul des gains sur la
-fenêtre longue, aucun ne rattrape. À utiliser pour la latence, avec le curseur du côté cerveau.
+Principe (`SpectralDenoiser::setZeroLatency`) : les gains sont toujours estimés sur les 256 derniers échantillons, au même
+rythme que le mode normal (un pas de 128), avec le même réseau. Mais au lieu de les appliquer dans le domaine fréquentiel
+(ce qui impose d'attendre une fenêtre), chaque jeu de gains devient un **filtre à phase minimale** de 160 coefficients
+(méthode du cepstre : logarithme du module, repliement, exponentielle) qui filtre directement les échantillons courants.
+Le retard propre du filtre mesuré est de 0 à 2 échantillons (0,04 ms). Le passage d'un filtre au suivant se fait en fondu
+sur un pas. Le coût est d'environ 320 multiplications par échantillon et par canal (15 millions par seconde) plus quelques
+FFT par pas.
+
+Mesures sur de la parole synthétique (`say`) avec bruit rose ou blanc à −35..−45 dBFS, **rapport signal/bruit sur le
+module du spectre** (insensible à la phase) contre la parole propre, gain par rapport à l'entrée :
+
+| | mode normal | High CPU (latence 0) |
+|---|---|---|
+| avec le réseau (voix 1 / voix 2) | +5,2 / +5,2 dB | +5,2 / +5,4 dB |
+| classique seul | +3,0 / +4,6 dB | +2,6 / +4,2 dB |
+
+La qualité est donc équivalente au mode normal. Réserves, mesurées : (1) le SI-SDR, qui compare la forme d'onde, est plus
+bas (+1 dB au lieu de +3 dB avec le réseau) : un filtre à phase minimale décale la phase de chaque fréquence, comme n'importe
+quel égaliseur à phase minimale, sans changer le module ; ce décalage n'est pas capturé par nos mesures, il
+faut l'écouter ; (2) le larsen est un peu moins bien tenu en boucle très forte (+9,5 dB de gain de boucle : 0,13 à 0,16 s
+au-dessus de −6 dBFS sur 22 s dans 2 cas sur 8, contre 0 s en mode normal dans 7 cas sur 8) ; (3) la porte vocale décide
+un pas plus tard, le début d'un mot peut être rogné de moins de 3 ms.
+
+Essayé et abandonné (à ne pas refaire) : pas d'estimation plus petits (64, 32, 16, 8 échantillons) : de plus en plus mauvais
+(l'estimateur de bruit est calibré pour 128) ; 256 coefficients au lieu de 160 : aucun gain ; retarder le signal filtré pour
+aligner les gains : gain de moins d'un dB, donc la péremption des gains n'est pas la cause principale. L'ancien mode
+« fenêtre de 128 » (latence 2,7 ms) reste dans le code (`setLowLatency`), il est moins bon et n'est plus utilisé.
+
+## Aucune baisse de niveau automatique
+
+Consigne : le plugin ne doit jamais baisser le niveau de la voix de lui-même. Ce qui baissait le niveau, et ce qui a été fait :
+
+- **Porte vocale** : éteinte par défaut (elle reste disponible).
+- **Frein anti-larsen** (coupe tout le son quand un larsen dépasse les filtres) : bouton « FREIN », **éteint par défaut**
+  (`FeedbackSuppressor::setBrake`). Éteint, les filtres travaillent seuls et le niveau ne bouge jamais ; en salle très
+  instable un larsen peut dépasser la profondeur des filtres, il faut alors allumer le frein.
+- **Débruiteur neuronal** : il a été entraîné avec une parole dont la crête allait de −20 à −1 dBFS ; une voix plus faible
+  lui ressemblait à du bruit et il la baissait (mesuré : −3,2 dB à −35 dBFS, −8 dB à −45 dBFS). On remonte maintenant le spectre
+  donné au modèle jusqu'à cette plage (`nnLiftDb`, au plus 40 dB, jamais plus haut que le bruit + 12 dB) ; son masque est un
+  gain, il ne dépend pas du niveau auquel il a été calculé. Mesure sur le VST3 (gain appliqué à la parole seule, réglages par
+  défaut) : −0,6 à −1,4 dB de −15 à −45 dBFS.
+- **Aigus** : au-dessus de 3 kHz la réduction de bruit ne va qu'à la moitié de la profondeur réglée (en dB), pour préserver les
+  sifflantes. Contrepartie : un peu plus de souffle aigu résiduel.
+
+Reste environ 1 dB de baisse moyenne : c'est la réduction de bruit elle-même, dans les bandes où le bruit domine. Pour
+l'éviter, baisser le curseur central.
 
 ## Bypass
 
 Le bouton rond (icône d'alimentation) en haut à droite coupe tout le traitement. Le son passe tel quel, retardé de la
-latence du plugin (256 échantillons, 128 en High CPU) pour rester aligné, avec un fondu de 10 ms : ni saut de timing ni clic. Le
+latence du plugin (256 échantillons, 0 en High CPU) pour rester aligné, avec un fondu de 10 ms : ni saut de timing ni clic. Le
 traitement continue en dessous, donc le retour est immédiat. Le bypass de l'hôte audio (AU/VST3) agit sur le même
 paramètre.
 
