@@ -1,7 +1,7 @@
 # Notes de reprise : Von De Larsen
 
 Résumé de la conversation de conception, pour reprendre le travail dans VS Code.
-Branche : `claude/voice-feedback-denoise-plugin` (rien n'est encore sur `main`, pas de PR ouverte).
+Tout le code est sur `main`. Les versions publiées (installateur, application, AU, VST3) sont dans les releases.
 
 ## Cahier des charges (décisions prises)
 
