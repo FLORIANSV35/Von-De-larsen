@@ -93,7 +93,8 @@ void testDenoise()
         if (c == 0.0) { gapIn += noisy[static_cast<size_t>(i - L)] * noisy[static_cast<size_t>(i - L)]; gapOut += out[static_cast<size_t>(i)] * out[static_cast<size_t>(i)]; }
     }
     check(db(eIn / eOut) >= 3.0, "denoiser improves SNR by >= 3 dB (dB)", db(eIn / eOut));
-    check(db(gapIn / gapOut) >= 10.0, "noise-only gaps attenuated >= 10 dB (dB)", db(gapIn / gapOut));
+    // above 3 kHz the reduction only goes half as deep (sibilants), so the white-noise gaps fall a little less than 10 dB
+    check(db(gapIn / gapOut) >= 8.0, "noise-only gaps attenuated >= 8 dB (dB)", db(gapIn / gapOut));
 }
 
 // Resonant room path: band-pass at 1.5 kHz with +3 dB peak gain, 10 ms delay.
@@ -363,10 +364,93 @@ void testLowLatency()
         if (c == 0.0) { gapIn += noisy[static_cast<size_t>(i - L)] * noisy[static_cast<size_t>(i - L)]; gapOut += out[static_cast<size_t>(i)] * out[static_cast<size_t>(i)]; }
     }
     check(db(eIn / eOut) >= 3.0, "high cpu: denoiser improves SNR by >= 3 dB (dB)", db(eIn / eOut));
-    check(db(gapIn / gapOut) >= 10.0, "high cpu: noise-only gaps attenuated >= 10 dB (dB)", db(gapIn / gapOut));
+    check(db(gapIn / gapOut) >= 8.0, "high cpu: noise-only gaps attenuated >= 8 dB (dB)", db(gapIn / gapOut));
 
     dn.setLowLatency(false); // switching back restores the normal latency
     check(dn.latencySamples() == vc::SpectralDenoiser::kN, "high cpu: switching back restores the latency (samples)", dn.latencySamples());
+}
+
+void testZeroLatency()
+{
+    // Zero latency: the gains become a minimum-phase filter applied to the current samples.
+    vc::SpectralDenoiser dn;
+    dn.setZeroLatency(true);
+    dn.prepare(kFs);
+    dn.setReductionDb(0); // unity gains: the filter is a plain unit impulse, the output is the input
+    std::mt19937 rng(1);
+    std::normal_distribution<float> nd(0.f, 0.1f);
+    const int n = 20000;
+    std::vector<float> x(n), y(n);
+    for (auto& s : x) s = nd(rng);
+    for (int i = 0; i < n; i += 100) dn.process(&x[static_cast<size_t>(i)], &y[static_cast<size_t>(i)], 100);
+    double err = 0, sig = 0;
+    for (int i = 0; i < n; ++i) {
+        const double d = y[static_cast<size_t>(i)] - x[static_cast<size_t>(i)];
+        err += d * d;
+        sig += static_cast<double>(x[static_cast<size_t>(i)]) * x[static_cast<size_t>(i)];
+    }
+    check(dn.latencySamples() == 0, "zero latency: reported latency is 0 samples", dn.latencySamples());
+    check(db(sig / err) > 60, "zero latency: unity gain leaves the signal untouched (SNR dB)", db(sig / err));
+
+    // the filter's own delay on a real reduction: an impulse comes out within a few samples
+    dn.setReductionDb(18);
+    std::vector<float> noise(static_cast<size_t>(kFs * 2)), outn(noise.size());
+    std::normal_distribution<float> nd2(0.f, 0.03f);
+    for (auto& s : noise) s = nd2(rng);
+    dn.process(noise.data(), outn.data(), static_cast<int>(noise.size())); // settle on noise: the gains drop
+    std::vector<float> imp(2048, 0.f), oi(2048);
+    imp[1000] = 0.5f;
+    dn.process(imp.data(), oi.data(), 2048);
+    int pk = 0;
+    for (int i = 0; i < 2048; ++i) if (std::fabs(oi[static_cast<size_t>(i)]) > std::fabs(oi[static_cast<size_t>(pk)])) pk = i;
+    check(pk >= 1000 && pk - 1000 <= 8, "zero latency: an impulse comes out within 8 samples (delay in samples)", pk - 1000);
+
+    const int m = static_cast<int>(kFs * 6);
+    auto clean = voice(m, 140, 0.3f, true);
+    std::mt19937 rng2(2);
+    std::normal_distribution<float> nd3(0.f, 0.06f);
+    std::vector<float> noisy(clean), out(static_cast<size_t>(m));
+    for (auto& s : noisy) s += nd3(rng2);
+    dn.prepare(kFs); // fresh state
+    dn.setReductionDb(18);
+    dn.process(noisy.data(), out.data(), m);
+    double gapIn = 0, gapOut = 0, vIn = 0, vOut = 0;
+    for (int i = static_cast<int>(kFs); i < m; ++i) {
+        const double c = clean[static_cast<size_t>(i)];
+        const double a = noisy[static_cast<size_t>(i)], b = out[static_cast<size_t>(i)];
+        if (c == 0.0) { gapIn += a * a; gapOut += b * b; }
+        else { vIn += a * a; vOut += b * b; }
+    }
+    check(db(gapIn / gapOut) >= 8.0, "zero latency: noise-only gaps attenuated >= 8 dB (dB)", db(gapIn / gapOut));
+    check(std::fabs(db(vOut / vIn)) < 1.5, "zero latency: the voice keeps its level (dB)", db(vOut / vIn));
+}
+
+void testBrakeOff()
+{
+    // A loop that outgrows the notches: with the brake the whole signal is cut; with the brake off the level is never touched
+    // by the guard (the notches still work), whatever happens.
+    auto run = [](bool brake) {
+        const int blk = 64, delay = 480, total = static_cast<int>(kFs * 6);
+        vc::FeedbackSuppressor fb;
+        fb.prepare(kFs);
+        fb.setBrake(brake);
+        Room room(1500, 8, 6.0); // a loop far above what notches alone can hold at once
+        std::mt19937 rng(3);
+        std::normal_distribution<float> nd(0.f, 0.001f);
+        std::vector<float> spk(static_cast<size_t>(total) + delay + blk, 0.f);
+        float maxGuard = 0.f;
+        for (int t = 0; t + blk <= total; t += blk) {
+            std::vector<float> x(blk);
+            for (int i = 0; i < blk; ++i) x[static_cast<size_t>(i)] = nd(rng) + room.process(spk[static_cast<size_t>(t + i)]);
+            fb.process(x.data(), blk);
+            for (int i = 0; i < blk; ++i) spk[static_cast<size_t>(t + i + delay)] = std::max(-1.f, std::min(1.f, x[static_cast<size_t>(i)]));
+            maxGuard = std::max(maxGuard, fb.stats().guardDb);
+        }
+        return maxGuard;
+    };
+    const float with = run(true), without = run(false);
+    check(with > 3.f, "brake on: the guard cuts the whole signal on a runaway loop (dB)", with);
+    check(without < 0.01f, "brake off: the guard never moves the level (dB)", without);
 }
 
 void testGateKeepsWeakSyllables()
@@ -470,9 +554,10 @@ void testVoiceGateNeural()
     bool vOpen = false, vClosed = true;
     const double eOpen = run(0.9f, true, &vOpen), eOpenOff = run(0.9f, false, nullptr);
     const double eClosed = run(0.02f, true, &vClosed), eClosedOff = run(0.02f, false, nullptr);
-    check(vOpen, "gate: a 'voice' neural mask keeps the gate open");
+    // The real model says "voice" on faint steady noise (86-99 % of the pauses): a mask alone must not hold the gate open.
+    check(!vOpen, "gate: a 'voice' neural mask on steady noise does not keep the gate open");
     check(!vClosed, "gate: a 'noise' neural mask closes the gate");
-    check(std::fabs(db(eOpen / eOpenOff)) < 1.0, "gate: open gate changes nothing (dB)", db(eOpen / eOpenOff));
+    check(db(eOpen / eOpenOff) < -17, "gate: noise is attenuated even when the mask says voice (dB)", db(eOpen / eOpenOff));
     check(db(eClosed / eClosedOff) < -17, "gate: closed gate drops the level by about its depth (dB)", db(eClosed / eClosedOff));
 }
 
@@ -1039,6 +1124,8 @@ int main()
     testReconstructionAndLatency();
     testDenoise();
     testLowLatency();
+    testZeroLatency();
+    testBrakeOff();
     testGateKeepsWeakSyllables();
     testFeedback();
     testSimultaneousNotches();

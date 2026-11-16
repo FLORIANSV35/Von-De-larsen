@@ -68,6 +68,10 @@ public:
     void process(float* x, int n) noexcept; // in place, 0 samples of latency
 
     // Flight-log counters, readable from any thread. They are not cleared by prepare()/reset().
+    // The runaway guard cuts the whole signal when a howl outgrows the notches. It is a broadband gain drop: switch it
+    // off (thread-safe) when the level must never move by itself; the notches keep working. On by default here.
+    void setBrake(bool on) { brakeOn_.store(on, std::memory_order_relaxed); }
+
     struct Stats {
         std::uint32_t events = 0;   // howl frequencies caught (a new notch is opened)
         double avoidedSeconds = 0;  // time during which a notch or the guard was holding a howl
@@ -148,6 +152,7 @@ private:
     std::atomic<std::uint32_t> events_ { 0 };
     std::atomic<std::uint64_t> avoidedSamples_ { 0 };
     std::atomic<float> cutSum_ { 0.f }, peakCut_ { 0.f }, lastFreq_ { 0.f }, guardOut_ { 0.f };
+    std::atomic<bool> brakeOn_ { true };
 };
 
 } // namespace vc

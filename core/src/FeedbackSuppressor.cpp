@@ -507,7 +507,7 @@ void FeedbackSuppressor::runawayGuard() noexcept
         guardTargetDb_ = std::max(floorNow, guardTargetDb_ - guardReleasePerHop_);
         guardFloorDb_ = std::max(0.f, guardFloorDb_ - guardFloorDecayPerHop_);
     }
-    guardTargetLin_ = std::pow(10.0f, -guardTargetDb_ / 20.0f);
+    guardTargetLin_ = brakeOn_.load(std::memory_order_relaxed) ? std::pow(10.0f, -guardTargetDb_ / 20.0f) : 1.f;
 
     const float guardNow = -20.0f * std::log10(std::max(guardLin_, 1e-6f));
     guardOut_.store(guardNow, std::memory_order_relaxed);
