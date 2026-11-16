@@ -4,10 +4,23 @@
 #include "VdlEditor.h"
 
 namespace {
+// JUCE's "application data" folders are ~/Library and /Library on the Mac: the model lives one level deeper.
+juce::File appSupport(juce::File::SpecialLocationType where)
+{
+    auto dir = juce::File::getSpecialLocation(where);
+  #if JUCE_MAC
+    dir = dir.getChildFile("Application Support");
+  #endif
+    return dir.getChildFile("VonDeLarsen");
+}
+
+// The user's own model wins (~/Library/Application Support), then the one the installer puts for everybody
+// (/Library/Application Support).
 juce::File modelFile()
 {
-    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-        .getChildFile("VonDeLarsen/denoise.mlmodelc");
+    const auto user = appSupport(juce::File::userApplicationDataDirectory).getChildFile("denoise.mlmodelc");
+    if (user.exists()) return user;
+    return appSupport(juce::File::commonApplicationDataDirectory).getChildFile("denoise.mlmodelc");
 }
 
 } // namespace

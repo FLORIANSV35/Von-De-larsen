@@ -389,6 +389,11 @@ private:
     void tick()
     {
         tm_ = proc_.telemetry();
+        const bool loaded = proc_.neuralModelLoaded();
+        if (loaded != neuralLoaded_) { // say so when no model was found: the brain side then does nothing
+            neuralLoaded_ = loaded;
+            neural_.setButtonText(loaded ? T("MASQUE NEURONAL") : T("NEURONAL : MODÈLE ABSENT"));
+        }
         repaint(34, 12, 652, 26);
         repaint(34, 506, 652, 310);
         learn_.setToggleState(tm_.learning, dontSendNotification);
@@ -571,6 +576,7 @@ private:
     std::unique_ptr<BA> neuralA_, highCpuA_, gateA_, autoOnA_, bypassA_;
     std::unique_ptr<SA> depthA_, autoDepthA_;
     VonDeLarsenProcessor::Telemetry tm_;
+    bool neuralLoaded_ = true;
 };
 
 // ------------------------------------------------------------------------------------------ editor

@@ -25,6 +25,8 @@ public:
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
+    // True when the neural model was found and loaded for the first channel (otherwise the classic path works alone).
+    bool neuralModelLoaded() const { return ch_[0].mask != nullptr; }
     // The host's own bypass switch drives our "bypass" parameter.
     juce::AudioProcessorParameter* getBypassParameter() const override { return apvts.getParameter("bypass"); }
     bool hasEditor() const override { return true; }

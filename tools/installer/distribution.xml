@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>Von De Larsen</title>
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+    <options customize="allow" require-scripts="false" hostArchitectures="arm64" rootVolumeOnly="true"/>
+
+    <pkg-ref id="com.vondelarsen.app"/>
+    <pkg-ref id="com.vondelarsen.au"/>
+    <pkg-ref id="com.vondelarsen.vst3"/>
+    <pkg-ref id="com.vondelarsen.model"/>
+
+    <choices-outline>
+        <line choice="app"/>
+        <line choice="au"/>
+        <line choice="vst3"/>
+        <line choice="model"/>
+    </choices-outline>
+
+    <choice id="app" title="Application Von De Larsen" description="Application autonome, 1 à 8 canaux. Installée dans /Applications.">
+        <pkg-ref id="com.vondelarsen.app"/>
+    </choice>
+    <choice id="au" title="Plugin Audio Unit" description="Pour Logic, GarageBand, MainStage, Ableton… Installé dans /Library/Audio/Plug-Ins/Components.">
+        <pkg-ref id="com.vondelarsen.au"/>
+    </choice>
+    <choice id="vst3" title="Plugin VST3" description="Pour Reaper, Ableton, Cubase, Bitwig… Installé dans /Library/Audio/Plug-Ins/VST3.">
+        <pkg-ref id="com.vondelarsen.vst3"/>
+    </choice>
+    <choice id="model" title="Profil Neural Engine (débruiteur neuronal)" description="Modèle CoreML exécuté par le Neural Engine de la puce Apple. Sans lui, seul le débruiteur classique travaille. Installé dans /Library/Application Support/VonDeLarsen.">
+        <pkg-ref id="com.vondelarsen.model"/>
+    </choice>
+
+    <pkg-ref id="com.vondelarsen.app" version="@VERSION@" onConclusion="none">app.pkg</pkg-ref>
+    <pkg-ref id="com.vondelarsen.au" version="@VERSION@" onConclusion="none">au.pkg</pkg-ref>
+    <pkg-ref id="com.vondelarsen.vst3" version="@VERSION@" onConclusion="none">vst3.pkg</pkg-ref>
+    <pkg-ref id="com.vondelarsen.model" version="@VERSION@" onConclusion="none">model.pkg</pkg-ref>
+</installer-gui-script>

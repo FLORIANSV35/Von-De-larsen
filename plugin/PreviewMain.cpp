@@ -140,7 +140,7 @@ static int highCpuTest()
     p.setPlayConfigDetails(1, 1, fs, blk);
     p.setRateAndBufferSizeDetails(fs, blk);
     p.prepareToPlay(fs, blk);
-    std::printf("start: latency %d samples\n", p.getLatencySamples());
+    std::printf("start: latency %d samples, neural model loaded: %s\n", p.getLatencySamples(), p.neuralModelLoaded() ? "yes" : "NO");
 
     std::mt19937 rng(8);
     std::normal_distribution<float> nd(0.f, 0.1f);

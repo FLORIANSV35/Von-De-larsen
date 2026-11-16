@@ -5,7 +5,30 @@ pensé pour la voix en sono live. Latence totale du plugin : **5,3 ms à 48 kHz*
 
 ## Installer (macOS Apple Silicon)
 
-Trois fichiers sont publiés dans la [dernière release](../../releases/latest). Ils ne sont **pas signés** par un compte
+### Le plus simple : l'installateur
+
+Téléchargez `VonDeLarsen-<version>.pkg` dans la [dernière release](../../releases/latest) et ouvrez-le. Il installe **tout** :
+
+| Élément (décochable avec « Personnaliser ») | Destination |
+|---|---|
+| Application autonome 1 à 8 canaux | `/Applications` |
+| Plugin **Audio Unit** | `/Library/Audio/Plug-Ins/Components` |
+| Plugin **VST3** | `/Library/Audio/Plug-Ins/VST3` |
+| **Profil Neural Engine** (modèle CoreML du débruiteur neuronal) | `/Library/Application Support/VonDeLarsen/denoise.mlmodelc` |
+
+Le mot de passe administrateur est demandé. L'installateur n'est **pas signé** (pas de compte développeur Apple) : au
+double-clic macOS refuse de l'ouvrir ; faire **clic droit, Ouvrir**, ou dans le Terminal
+`xattr -d com.apple.quarantine ~/Downloads/VonDeLarsen-*.pkg`. Ensuite, accepter l'accès au micro au premier lancement
+de l'application, et rescanner les plugins dans le logiciel audio. Le modèle placé dans
+`~/Library/Application Support/VonDeLarsen/` (le vôtre) est prioritaire sur celui de l'installateur. Si aucun modèle
+n'est trouvé, le bouton « Masque neuronal » affiche « MODÈLE ABSENT » et le débruiteur classique travaille seul.
+
+Fabriquer l'installateur soi-même : `tools/make_installer.sh 0.3.0` (compile, signe en ad hoc, emballe ; le modèle est pris dans
+`~/Library/Application Support/VonDeLarsen/denoise.mlmodelc` ou dans `MODEL=…`). Résultat dans `dist/`.
+
+### À la main
+
+Trois fichiers sont aussi publiés séparément dans la [dernière release](../../releases/latest). Ils ne sont **pas signés** par un compte
 développeur Apple : macOS les bloque au premier lancement tant qu'on ne le leur a pas autorisé (étape 2).
 
 | Fichier | Contenu | Où le mettre |
@@ -54,8 +77,8 @@ Reaper : Préférences, Plug-ins, VST, Re-scan). Le plugin s'appelle « Von De L
 Si Logic refuse un Audio Unit, le valider dans le Terminal : `auval -v aufx Vdl1 Vdls` (type, code du plugin, code du fabricant).
 
 **6. Modèle neuronal (facultatif).** Sans lui, le débruiteur classique travaille seul (le curseur ciseau/cerveau n'a alors
-plus d'effet côté cerveau). Le modèle n'est **pas** dans la release : il s'entraîne avec `tools/train_mask.py` (voir
-« Modèle installé » plus bas). Le dossier compilé `denoise.mlmodelc` se place ici :
+plus d'effet côté cerveau, et le bouton affiche « MODÈLE ABSENT »). Les zips ne le contiennent pas (l'installateur `.pkg` oui) : il
+s'entraîne avec `tools/train_mask.py` (voir « Modèle installé » plus bas). Le dossier compilé `denoise.mlmodelc` se place ici :
 
 ```sh
 mkdir -p ~/Library/Application\ Support/VonDeLarsen
@@ -64,7 +87,9 @@ cp -R denoise.mlmodelc ~/Library/Application\ Support/VonDeLarsen/
 
 Plugin et application le chargent au démarrage.
 
-Pour **tout désinstaller** : supprimer l'application, les deux plugins et le dossier `~/Library/Application Support/VonDeLarsen`.
+Pour **tout désinstaller** : supprimer `/Applications/Von De Larsen.app`, `Von De Larsen.component` et `Von De Larsen.vst3` (dans
+`/Library/Audio/Plug-Ins/…` ou `~/Library/Audio/Plug-Ins/…`), les dossiers `/Library/Application Support/VonDeLarsen` et
+`~/Library/Application Support/VonDeLarsen`, et `~/Library/VonDeLarsen`.
 
 ## Architecture
 
@@ -126,7 +151,7 @@ sélecteur « Canaux » (1–8) ; en haut à droite, « Réglages audio » (choi
 sorties). Le canal *i* en entrée devient le canal *i* en sortie, chacun avec son propre anti-larsen et
 débruiteur. Réglages partagés : sensibilité larsen, coupure max, réduction de bruit, mélange ciseau/cerveau.
 La notice « ? » affiche la latence (plugin + carte son). L'état, la carte son choisie et le journal de bord sont
-sauvegardés à la fermeture dans `~/Library/Application Support/VonDeLarsen/standalone.xml`.
+sauvegardés à la fermeture dans `~/Library/VonDeLarsen/standalone.xml`.
 Compiler avec `-DVDL_BUILD_STANDALONE=ON` (activé par défaut sur macOS).
 Avec un modèle CoreML, chaque canal lance son propre thread d'inférence : 8 canaux = 8 × 375 inférences/s,
 à mesurer avec `bench_mask` avant de compter dessus.
