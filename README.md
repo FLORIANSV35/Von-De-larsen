@@ -1,7 +1,70 @@
 # Von De Larsen
 
 Plugin vocal (AU + VST3, macOS Apple Silicon) : **anti-larsen** et **réduction de bruit de fond**,
-pensé pour la voix en sono live. Latence totale du plugin : **5,3 ms à 48 kHz** (objectif ≤ 10 ms).
+pensé pour la voix en sono live. Latence totale du plugin : **5,3 ms à 48 kHz** (**2,7 ms** en mode High CPU, objectif ≤ 10 ms).
+
+## Installer (macOS Apple Silicon)
+
+Trois fichiers sont publiés dans la [dernière release](../../releases/latest). Ils ne sont **pas signés** par un compte
+développeur Apple : macOS les bloque au premier lancement tant qu'on ne le leur a pas autorisé (étape 2).
+
+| Fichier | Contenu | Où le mettre |
+|---|---|---|
+| `VonDeLarsen-macOS.zip` | application autonome multicanal (1 à 8 entrées) | `/Applications` |
+| `VonDeLarsen-AU.zip` | plugin **Audio Unit** (Logic, GarageBand, MainStage, Ableton…) | `~/Library/Audio/Plug-Ins/Components/` |
+| `VonDeLarsen-VST3.zip` | plugin **VST3** (Reaper, Ableton, Cubase, Bitwig…) | `~/Library/Audio/Plug-Ins/VST3/` |
+
+**1. Décompresser et placer** (le dossier `Library` est celui de votre compte, pas celui du disque) :
+
+```sh
+cd ~/Downloads
+unzip VonDeLarsen-macOS.zip -d /Applications
+mkdir -p ~/Library/Audio/Plug-Ins/Components ~/Library/Audio/Plug-Ins/VST3
+unzip VonDeLarsen-AU.zip   -d ~/Library/Audio/Plug-Ins/Components
+unzip VonDeLarsen-VST3.zip -d ~/Library/Audio/Plug-Ins/VST3
+```
+
+**2. Lever le blocage de macOS.** Un fichier téléchargé reçoit une marque de quarantaine ; sur un programme non signé,
+macOS affiche « est endommagé » ou « ne peut pas être ouvert ». On retire la marque :
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/Von De Larsen.app"
+xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/"Von De Larsen.component"
+xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/"Von De Larsen.vst3"
+```
+
+Pour l'application seulement, on peut aussi faire clic droit sur l'icône, **Ouvrir**, puis confirmer.
+
+**3. Droits d'exécution (seulement si « permission denied »).** Les zips conservent les droits, donc c'est normalement inutile.
+Si un outil de décompression les a perdus (le plugin n'apparaît pas, ou l'app ne démarre pas, avec « Permission denied » dans
+le Terminal) :
+
+```sh
+chmod +x "/Applications/Von De Larsen.app/Contents/MacOS/Von De Larsen"
+chmod +x ~/Library/Audio/Plug-Ins/Components/"Von De Larsen.component/Contents/MacOS/Von De Larsen"
+chmod +x ~/Library/Audio/Plug-Ins/VST3/"Von De Larsen.vst3/Contents/MacOS/Von De Larsen"
+```
+
+**4. Autoriser le micro.** Au premier lancement de l'application, accepter l'accès au micro. En cas de refus par erreur :
+Réglages Système, Confidentialité et sécurité, Micro, cocher « Von De Larsen ». Un plugin utilise l'autorisation de
+son logiciel hôte.
+
+**5. Redémarrer le logiciel audio** puis rescanner les plugins (Logic : Réglages, Plug-ins, Réinitialiser et rescanner ;
+Reaper : Préférences, Plug-ins, VST, Re-scan). Le plugin s'appelle « Von De Larsen » (fabricant « VonDeLarsen »).
+Si Logic refuse un Audio Unit, le valider dans le Terminal : `auval -v aufx Vdl1 Vdls` (type, code du plugin, code du fabricant).
+
+**6. Modèle neuronal (facultatif).** Sans lui, le débruiteur classique travaille seul (le curseur ciseau/cerveau n'a alors
+plus d'effet côté cerveau). Le modèle n'est **pas** dans la release : il s'entraîne avec `tools/train_mask.py` (voir
+« Modèle installé » plus bas). Le dossier compilé `denoise.mlmodelc` se place ici :
+
+```sh
+mkdir -p ~/Library/Application\ Support/VonDeLarsen
+cp -R denoise.mlmodelc ~/Library/Application\ Support/VonDeLarsen/
+```
+
+Plugin et application le chargent au démarrage.
+
+Pour **tout désinstaller** : supprimer l'application, les deux plugins et le dossier `~/Library/Application Support/VonDeLarsen`.
 
 ## Architecture
 
