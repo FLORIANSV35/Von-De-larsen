@@ -1,43 +1,51 @@
 # Von De Larsen
 
-Plugin vocal (AU + VST3, macOS Apple Silicon) : **anti-larsen** et **réduction de bruit de fond**,
-pensé pour la voix en sono live. Latence totale du plugin : **5,3 ms à 48 kHz** (**0 ms** en mode High CPU, objectif ≤ 10 ms).
+**Anti-feedback and noise reduction for live voice.** An AU / VST3 plugin and a multichannel standalone app for
+macOS (Apple Silicon). The goal: push the voice very loud through a PA **without howling**, with as little delay as
+possible and without the level moving by itself.
 
-## Installer (macOS Apple Silicon)
+- **Anti-feedback ("larsen")**: adaptive notch filters placed in the time domain (0 ms), with a runaway brake you can
+  switch on for unstable rooms.
+- **Noise reduction**: a classic Wiener estimator blended with a neural mask running on the Apple Neural Engine (CoreML).
+- **Zero-latency mode** ("High CPU"): the denoiser adds 0 ms instead of 5.3 ms.
+- **Learn the room**: raise the gain while someone talks; every feedback frequency found becomes a permanent notch.
+- Voice gate, Dugan-style automixer for 2–8 microphones, latency-aligned bypass, flight-log telemetry.
+- Red-and-black cockpit UI with a rocket knob. Yes, really.
 
-### Le plus simple : l'installateur
+> Status: tested in simulation and in a JUCE VST3 test host. **Not yet validated in a DAW with a real microphone and a
+> real PA.** See [Limits](#limits).
 
-Téléchargez `VonDeLarsen-<version>.pkg` dans la [dernière release](../../releases/latest) et ouvrez-le. Il installe **tout** :
+## Contents
 
-| Élément (décochable avec « Personnaliser ») | Destination |
+1. [Install](#install-macos-apple-silicon)
+2. [Controls](#controls)
+3. [Measured performance](#measured-performance)
+4. [How it works](#how-it-works)
+5. [Build and test](#build-and-test)
+6. [Neural model](#neural-model)
+7. [Tools](#tools)
+8. [Limits](#limits)
+
+## Install (macOS, Apple Silicon)
+
+### Easiest: the installer
+
+Download `VonDeLarsen-<version>.pkg` from the [latest release](../../releases/latest) and open it. It installs everything:
+
+| Component (each can be unticked under "Customize") | Destination |
 |---|---|
-| Application autonome 1 à 8 canaux | `/Applications` |
-| Plugin **Audio Unit** | `/Library/Audio/Plug-Ins/Components` |
-| Plugin **VST3** | `/Library/Audio/Plug-Ins/VST3` |
-| **Profil Neural Engine** (modèle CoreML du débruiteur neuronal) | `/Library/Application Support/VonDeLarsen/denoise.mlmodelc` |
+| Standalone app, 1–8 channels | `/Applications` |
+| **Audio Unit** plugin | `/Library/Audio/Plug-Ins/Components` |
+| **VST3** plugin | `/Library/Audio/Plug-Ins/VST3` |
+| **Neural Engine profile** (the CoreML denoising model) | `/Library/Application Support/VonDeLarsen/denoise.mlmodelc` |
 
-Le mot de passe administrateur est demandé. L'installateur n'est **pas signé** (pas de compte développeur Apple) : au
-double-clic macOS refuse de l'ouvrir ; faire **clic droit, Ouvrir**, ou dans le Terminal
-`xattr -d com.apple.quarantine ~/Downloads/VonDeLarsen-*.pkg`. Ensuite, accepter l'accès au micro au premier lancement
-de l'application, et rescanner les plugins dans le logiciel audio. Le modèle placé dans
-`~/Library/Application Support/VonDeLarsen/` (le vôtre) est prioritaire sur celui de l'installateur. Si aucun modèle
-n'est trouvé, le bouton « Masque neuronal » affiche « MODÈLE ABSENT » et le débruiteur classique travaille seul.
+The installer asks for an administrator password. It is **not signed or notarised** (no Apple Developer account), so
+macOS refuses to open it on double-click: right-click it and choose **Open**, or run
+`xattr -d com.apple.quarantine ~/Downloads/VonDeLarsen-*.pkg`.
 
-Fabriquer l'installateur soi-même : `tools/make_installer.sh 0.3.0` (compile, signe en ad hoc, emballe ; le modèle est pris dans
-`~/Library/Application Support/VonDeLarsen/denoise.mlmodelc` ou dans `MODEL=…`). Résultat dans `dist/`.
+### By hand
 
-### À la main
-
-Trois fichiers sont aussi publiés séparément dans la [dernière release](../../releases/latest). Ils ne sont **pas signés** par un compte
-développeur Apple : macOS les bloque au premier lancement tant qu'on ne le leur a pas autorisé (étape 2).
-
-| Fichier | Contenu | Où le mettre |
-|---|---|---|
-| `VonDeLarsen-macOS.zip` | application autonome multicanal (1 à 8 entrées) | `/Applications` |
-| `VonDeLarsen-AU.zip` | plugin **Audio Unit** (Logic, GarageBand, MainStage, Ableton…) | `~/Library/Audio/Plug-Ins/Components/` |
-| `VonDeLarsen-VST3.zip` | plugin **VST3** (Reaper, Ableton, Cubase, Bitwig…) | `~/Library/Audio/Plug-Ins/VST3/` |
-
-**1. Décompresser et placer** (le dossier `Library` est celui de votre compte, pas celui du disque) :
+The release also ships `VonDeLarsen-macOS.zip`, `VonDeLarsen-AU.zip` and `VonDeLarsen-VST3.zip` (no model inside).
 
 ```sh
 cd ~/Downloads
@@ -47,8 +55,7 @@ unzip VonDeLarsen-AU.zip   -d ~/Library/Audio/Plug-Ins/Components
 unzip VonDeLarsen-VST3.zip -d ~/Library/Audio/Plug-Ins/VST3
 ```
 
-**2. Lever le blocage de macOS.** Un fichier téléchargé reçoit une marque de quarantaine ; sur un programme non signé,
-macOS affiche « est endommagé » ou « ne peut pas être ouvert ». On retire la marque :
+**Remove the macOS quarantine** (otherwise "is damaged" or "cannot be opened"):
 
 ```sh
 xattr -dr com.apple.quarantine "/Applications/Von De Larsen.app"
@@ -56,11 +63,7 @@ xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/"Von De Larse
 xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/"Von De Larsen.vst3"
 ```
 
-Pour l'application seulement, on peut aussi faire clic droit sur l'icône, **Ouvrir**, puis confirmer.
-
-**3. Droits d'exécution (seulement si « permission denied »).** Les zips conservent les droits, donc c'est normalement inutile.
-Si un outil de décompression les a perdus (le plugin n'apparaît pas, ou l'app ne démarre pas, avec « Permission denied » dans
-le Terminal) :
+**Execute permission** (only if you get "Permission denied" because an unzip tool dropped it; the zips keep it):
 
 ```sh
 chmod +x "/Applications/Von De Larsen.app/Contents/MacOS/Von De Larsen"
@@ -68,298 +71,237 @@ chmod +x ~/Library/Audio/Plug-Ins/Components/"Von De Larsen.component/Contents/M
 chmod +x ~/Library/Audio/Plug-Ins/VST3/"Von De Larsen.vst3/Contents/MacOS/Von De Larsen"
 ```
 
-**4. Autoriser le micro.** Au premier lancement de l'application, accepter l'accès au micro. En cas de refus par erreur :
-Réglages Système, Confidentialité et sécurité, Micro, cocher « Von De Larsen ». Un plugin utilise l'autorisation de
-son logiciel hôte.
-
-**5. Redémarrer le logiciel audio** puis rescanner les plugins (Logic : Réglages, Plug-ins, Réinitialiser et rescanner ;
-Reaper : Préférences, Plug-ins, VST, Re-scan). Le plugin s'appelle « Von De Larsen » (fabricant « VonDeLarsen »).
-Si Logic refuse un Audio Unit, le valider dans le Terminal : `auval -v aufx Vdl1 Vdls` (type, code du plugin, code du fabricant).
-
-**6. Modèle neuronal (facultatif).** Sans lui, le débruiteur classique travaille seul (le curseur ciseau/cerveau n'a alors
-plus d'effet côté cerveau, et le bouton affiche « MODÈLE ABSENT »). Les zips ne le contiennent pas (l'installateur `.pkg` oui) : il
-s'entraîne avec `tools/train_mask.py` (voir « Modèle installé » plus bas). Le dossier compilé `denoise.mlmodelc` se place ici :
+**Neural model** (optional; without it the classic denoiser works alone and the "Neuronal" button reads "NEURONAL ABSENT"):
 
 ```sh
 mkdir -p ~/Library/Application\ Support/VonDeLarsen
-cp -R denoise.mlmodelc ~/Library/Application\ Support/VonDeLarsen/
+cp -R denoise.mlmodelc ~/Library/Application\ Support/VonDeLarsen/   # your own model wins over the installer's
 ```
 
-Plugin et application le chargent au démarrage.
+Then: allow microphone access on first launch of the app, restart your audio software and rescan plugins
+(Logic: Settings → Plug-ins → Reset & Rescan; Reaper: Preferences → Plug-ins → VST → Re-scan). If Logic rejects the
+Audio Unit, validate it with `auval -v aufx Vdl1 Vdls`.
 
-Pour **tout désinstaller** : supprimer `/Applications/Von De Larsen.app`, `Von De Larsen.component` et `Von De Larsen.vst3` (dans
-`/Library/Audio/Plug-Ins/…` ou `~/Library/Audio/Plug-Ins/…`), les dossiers `/Library/Application Support/VonDeLarsen` et
-`~/Library/Application Support/VonDeLarsen`, et `~/Library/VonDeLarsen`.
+**Uninstall:** delete `/Applications/Von De Larsen.app`, `Von De Larsen.component` and `Von De Larsen.vst3` (from
+`/Library/Audio/Plug-Ins/…` or `~/Library/Audio/Plug-Ins/…`), the folders `/Library/Application Support/VonDeLarsen`
+and `~/Library/Application Support/VonDeLarsen`, and `~/Library/VonDeLarsen` (standalone settings).
 
-## Architecture
+## Controls
 
-```
-micro ─▶ FeedbackSuppressor ─▶ SpectralDenoiser ─▶ sortie
-          (notchs temporels,     (STFT 256, hop 128,
-           0 ms de latence)       latence = 256 éch.)
-                                        ▲
-                                        │ masque (asynchrone, 1 hop de retard)
-                          AsyncMaskProvider ── thread ── CoreML ── Neural Engine
-```
-
-| Bloc | Rôle | Latence |
+| Control | What it does | Default |
 |---|---|---|
-| `FeedbackSuppressor` | Analyse FFT 1024 en parallèle (sans retarder l'audio) qui repère les pics étroits, persistants et croissants (ratio pic/voisins, rejet des signaux harmoniques = voix). Place jusqu'à 8 filtres notch (Q = 30, jusqu'à −18 dB par défaut) maintenus 10 s. | 0 |
-| `SpectralDenoiser` | Wiener à décision dirigée + suivi de minimum pour le bruit, plus la porte vocale. Si un modèle CoreML est présent, son masque est **mélangé** au gain classique (moyenne géométrique, curseur « Neural share », 0 = classique seul). | 256 éch. |
-| `AsyncMaskProvider` | Boîtes aux lettres sans verrou entre le thread audio et le thread d'inférence. Un modèle lent ne bloque jamais l'audio : le plugin retombe sur le Wiener classique si le masque a plus de 4 hops. | 0 |
+| **Noise reduction** (big rocket knob) | Maximum noise attenuation, 0–30 dB. Above 3 kHz it only goes half as deep (in dB) to protect sibilants. | 15 dB |
+| **Sensitivity** | How early the detector calls a howl. High reacts sooner but may mistake a very pure sustained note. | 50 % |
+| **Max cut** | Depth limit of each notch, 6–40 dB. | 24 dB |
+| **Chisel ↔ Brain** slider | Classic Wiener (left) to neural mask (right). The two are blended as `g = g_wiener^(1-m) · g_neural^m`. | 0.7 |
+| **Neuronal** | Turns the neural mask on or off. Reads "ABSENT" when no model was found. | on |
+| **High CPU** | **Zero-latency** denoiser (0 ms instead of 5.3 ms). The button shows the latency. | off |
+| **Brake** | When a howl outgrows the notches, cut the whole signal at once. Off = the level never moves by itself. | **off** |
+| **Voice gate** + depth | Lowers the sound by 0–40 dB when nobody is speaking. | **off**, 12 dB |
+| **Automix** + depth | Dugan-style gain sharing between 2–8 mics. Plugin: off. Standalone: on at first launch. | off, 20 dB |
+| **Learn the room** | See [Learn the room](#learn-the-room). | |
+| **Bypass** (round button) | Dry sound delayed by the plugin latency, with a 10 ms crossfade. Follows the host's bypass. | off |
+| **?** | Built-in help for every control, with the current latency. | |
 
-### Mélange réseau + classique
+The flight log shows howls caught, time avoided, a fun "altitude" (50 m per dB of cut), flight time, a progress bar
+to the Moon, and the CPU load.
 
-- **Bruit** : `g = g_wiener^(1-m) · g_réseau^m`. Le gain de Wiener est toujours calculé, donc si le réseau
-  est en retard ou absent on retombe sur le classique sans coupure.
-- **Larsen** : le détecteur classique reste seul décideur, mais le masque du réseau sert d'indice. Là où le
-  réseau dit « pas de la voix », les seuils baissent de 4 dB (réaction plus rapide). Là où il dit
-  « voix », ils montent de 3 dB. Un indice faux ne peut donc jamais empêcher un vrai larsen d'être coupé
-  (testé avec un indice figé à 0, 0,5 et 1).
+**No automatic level drop.** The plugin never lowers the voice by itself: the gate and the brake are off by default,
+and the neural input is level-normalised (see [Neural model](#neural-model)). The one remaining effect is the noise
+reduction itself, about 1 dB on average where noise dominates; lower the big knob to remove it.
 
-### Pourquoi le Neural Engine est asynchrone
+## Measured performance
 
-Le Neural Engine n'est accessible que via CoreML, qui n'offre aucune garantie temps réel (latence de
-dispatch de l'ordre de la milliseconde, avec de la gigue). Le laisser dans le chemin audio ferait
-craquer le son au moindre retard. Le masque est donc calculé sur la trame précédente et appliqué à la
-trame courante : il ne coûte **aucune latence audio**, seulement ~2,7 ms de « fraîcheur » du masque.
-Le larsen, lui, doit réagir très vite, il reste donc en DSP pur.
+All numbers come from simulations with synthetic room models and text-to-speech voices (macOS `say`, plus 243 s of
+LibriSpeech for false-positive checks). They compare settings and detect regressions; they do not replace a room test.
 
-## Compiler et tester (n'importe quelle plateforme)
+### Latency
+
+| Mode | Latency at 48 kHz |
+|---|---|
+| Normal | 256 samples = **5.33 ms** (the denoiser; the notches add none) |
+| **High CPU** | **0 samples reported; 0–2 samples measured** (0.04 ms) |
+
+Measured with an impulse through the VST3 loaded as a black box. The bypass stays aligned bit for bit in both modes.
+The host's audio buffer and the sound card add their own latency, which no plugin controls.
+
+### Level kept on the voice
+
+Gain applied to the speech itself (default settings, pink-ish room noise at −60 and −50 dBFS), measured through the
+VST3 by projecting the output on the clean speech:
+
+| Speech peak at the input | −15 dBFS | −25 dBFS | −35 dBFS | −45 dBFS |
+|---|---|---|---|---|
+| Gain on the voice | −0.6 dB | −1.0 to −1.4 dB | −0.8 to −1.2 dB | −0.8 to −1.2 dB |
+
+Before the neural input was level-normalised the same test gave −3.2 dB at −35 dBFS and up to −8 dB at −45 dBFS: the
+model had only been trained on speech peaking at −20…−1 dBFS and cut quieter voices as if they were noise.
+
+### Noise reduction quality
+
+SNR gain of the STFT magnitude against the clean speech (phase-blind), TTS voices at −20 dBFS, pink noise at −35 dBFS:
+
+| | Normal mode | High CPU (0 ms) |
+|---|---|---|
+| With the neural mask (mix 0.7) | +5.2 / +5.2 dB | +5.2 / +5.4 dB |
+| Classic only (mix 0) | +3.0 / +4.6 dB | +2.6 / +4.2 dB |
+
+(two voices each). A phase-sensitive metric (SI-SDR) is lower for High CPU (about +1 dB instead of +3 dB with the mask):
+the zero-latency filter is minimum-phase, like any minimum-phase EQ, so it shifts phase without changing magnitude.
+Our metrics do not capture how that sounds: **listen to it**. With the mask, High CPU loses about 0.3–1.2 dB more at
+3–6 kHz than normal mode; with classic only, 1–3 dB more.
+
+### Howl suppression
+
+Speech looped through a simulated room (band-pass resonances, Q 8, 10 ms delay, hard-clipping speaker), measured through
+the VST3 over 22 s, time spent with output peaks above −6 dBFS (howl or clipping):
+
+| Loop gain | Unprocessed | Normal mode | High CPU |
+|---|---|---|---|
+| +3 dB (stable loop for the plugin, 1 or 3 resonances) | howls for 11.7 s of 12 s | 0 s | 0 s |
+| +9.5 dB, 1 resonance | not measured | 0 s | 0 to 0.13 s |
+| +9.5 dB, 3 resonances | not measured | 0 to 0.15 s | 0 to 0.16 s |
+
+Standalone detector (no gate, no denoiser), hard simulated loops (loud voice, clipping speaker, wide Q 6 resonances):
+first notch in 140–310 ms, audible howl (> −20 dBFS) for 150–290 ms, then silence (−63 to −76 dBFS), including at
++20 dB. Worst remaining case: four wide resonances at +20 dB (−30 dBFS residual).
+**False triggers on real speech** (41 LibriSpeech utterances, 243 s, levels 0.15–0.6, full chain with the model): 0 notches,
+0 dB of brake. These detector figures predate v0.2.4 and were not repeated for it. High CPU results were measured on the
+v0.2.3 build.
+
+Why not faster? A word onset and a howl look alike for about 30 ms (same dominant band, same rising slope, same crest
+factor). An experimental fast path catches a howl in 25–40 ms but opens 35 useless notches in 243 s of speech, so it is off.
+
+### Learn the room
+
+Real speech, full chain with the model, simulated room, gain swept up to +18 dB only while the voice is present:
+
+| Room | Result |
+|---|---|
+| Healthy (loop gain −45 dB) | no howl, **no notch learned** (speech alone teaches nothing) |
+| Two resonances (900, 2400 Hz) | both found, notches kept with a margin of about +6 dB |
+
+Tested at microphone levels from −20 to +6 dB around a typical speech level. At −40 dB it sometimes finds only one of
+two resonances; at +12 dB it aborts on purpose (the signal is too hot to raise the gain safely).
+
+### CPU
+
+About 0.5–0.7 % of one core per channel in the simulations. High CPU adds roughly 15 million multiply-adds per second
+per channel. With the neural model each channel runs its own inference thread: 8 channels = 8 × 375 inferences/s
+(measure with `bench_mask` before relying on it).
+
+## How it works
+
+```
+mic ─▶ FeedbackSuppressor ─▶ SpectralDenoiser ─▶ voice gate ─▶ output
+       (time-domain notches,   (STFT 256, hop 128,
+        0 ms)                   Wiener + neural mask)
+                                      ▲
+                                      │ mask (asynchronous, ~1 hop old)
+                        AsyncMaskProvider ─ thread ─ CoreML ─ Neural Engine
+```
+
+| Block | Role | Latency |
+|---|---|---|
+| `FeedbackSuppressor` | A 1024-point FFT every 128 samples (in parallel, the audio is not delayed) finds narrow, persistent, growing peaks and rejects harmonic ones (voice). Up to 12 adaptive notches that widen when a howl jumps within a broad resonance. Optional runaway brake. | 0 |
+| `SpectralDenoiser` | Decision-directed Wiener estimator with minimum tracking for the noise, blended with the neural mask; voice gate. | 256 samples, or 0 in High CPU |
+| `AsyncMaskProvider` | Lock-free mailboxes between the audio thread and the inference thread. A slow model never blocks audio: after 4 stale hops the plugin falls back to the classic gain. | 0 |
+| `AutoMixer` | `g_i² = Q_i / ΣQ`, power weighted by each channel's voice score; one talker keeps 0 dB, the others drop to the floor. | 0 |
+| `BypassMixer` | Keeps a history of the dry input; crossfades in 10 ms, aligned to the plugin latency. | 0 |
+
+### Zero-latency denoiser (High CPU)
+
+Gains are still estimated on the last 256 samples at the normal pace, with the same neural mask. But instead of applying
+them in the frequency domain (which means waiting for a window to fill), each set of gains becomes a **minimum-phase FIR
+filter** (cepstral method: log magnitude, fold, exponentiate; 256 taps, a 1024-point cepstrum) that filters the current
+samples directly, crossfading from one filter to the next. The filter's own delay is 0–2 samples. Tried and rejected: smaller
+estimation hops (8–64 samples, progressively worse because the noise estimator is tuned for 128), 160 vs 256 taps (no
+difference in quality), and delaying the signal to realign the gains (under 1 dB gain).
+
+### Voice gate
+
+Once per hop the speech band (about 190 Hz–3.9 kHz) must stand 1.5–7.5 dB above the tracked noise floor, a ratio that does
+not depend on the input level. The neural mask only adds a quarter of its score: the real model takes faint steady noise
+for clean signal and says "voice" in 86–99 % of the pauses, so on its own it would never let the gate close. The gate
+opens at once, holds for 350 ms and closes over 200 ms with a ramp.
+
+### Learn the room
+
+Press the button while someone speaks into the microphone as they will during the show. The output gain rises slowly
+(0.5 dB/s, up to +18 dB) **only while voice is present**; the chain is untouched, so the gate and denoiser work in
+real conditions. Every howl that appears becomes a **permanent notch** (up to 8) that is never released and is saved with
+the project. The climb pauses 2 s at each howl, goes on until 6 dB above the last one, then returns to 0 dB in 2 s. It
+stops by itself if the input gets too hot (above −3 dBFS) or after 4 minutes. No test noise is ever sent into the PA.
+
+### Neural and classic, together
+
+The classic Wiener gain is always computed, so if the model is late or missing the sound never drops out. For feedback
+detection the mask is only a hint: where it says "not voice" thresholds fall by 4 dB, where it says "voice" they rise by
+3 dB, so a wrong hint cannot stop a real howl from being cut (tested with a hint frozen at 0, 0.5 and 1).
+
+### Why the Neural Engine runs asynchronously
+
+CoreML gives no real-time guarantee (about a millisecond of dispatch latency, with jitter). The mask is computed on the
+previous frame and applied to the current one: no extra audio latency, only about 2.7 ms of mask freshness.
+
+## Build and test
+
+Portable core and tests (any platform):
 
 ```sh
 cmake -S . -B build -DVDL_BUILD_PLUGIN=OFF && cmake --build build -j
 ./build/tests/test_core
 ```
 
-Les tests couvrent : reconstruction parfaite et latence, gain de SNR, boucle de larsen simulée
-(−1 dBFS sans plugin → −60 dBFS avec), absence de faux positifs sur voix soutenue (110/220/440 Hz) et
-boîte aux lettres asynchrone.
+The tests cover reconstruction and latency, SNR gain, zero latency, howl loops, false positives on sustained voices,
+the voice gate (including weak syllables), automix, bypass alignment, learn-the-room, the brake switch and the async mailbox.
 
-Pour mesurer un plugin VST3 comme une boîte noire (latence, niveau, comportement dans une boucle qui siffle), voir
-`tools/plugin_probe/README.md`.
-
-## Compiler le plugin (macOS, Apple Silicon)
+Plugin, app and installer (macOS, Apple Silicon, JUCE 8.0.4 fetched automatically):
 
 ```sh
-cmake -S . -B build -DVDL_BUILD_PLUGIN=ON && cmake --build build --config Release
+cmake -S . -B build -DVDL_BUILD_PLUGIN=ON -DVDL_BUILD_STANDALONE=ON && cmake --build build --config Release
+tools/make_installer.sh 0.3.0     # .pkg in dist/ (re-signs the bundles ad hoc; model from ~/Library/Application Support/VonDeLarsen)
 ```
 
-JUCE 8.0.4 est téléchargé automatiquement. Le plugin est copié dans `~/Library/Audio/Plug-Ins/`.
+The plugin is copied to `~/Library/Audio/Plug-Ins/` after each build. `VonDeLarsenPreview` (`-DVDL_BUILD_UI_PREVIEW=ON`)
+renders the editor to PNG and runs processor self-tests (`x selftest`, `x highcpu`, `x uilearn`).
 
-## Application standalone multicanal (1 à 8 canaux)
+## Neural model
 
-`VonDeLarsenApp` : même moteur et même interface « Poste de pilotage » que le plugin. En haut à gauche, le
-sélecteur « Canaux » (1–8) ; en haut à droite, « Réglages audio » (choix de la carte son, des entrées et des
-sorties). Le canal *i* en entrée devient le canal *i* en sortie, chacun avec son propre anti-larsen et
-débruiteur. Réglages partagés : sensibilité larsen, coupure max, réduction de bruit, mélange ciseau/cerveau.
-La notice « ? » affiche la latence (plugin + carte son). L'état, la carte son choisie et le journal de bord sont
-sauvegardés à la fermeture dans `~/Library/VonDeLarsen/standalone.xml`.
-Compiler avec `-DVDL_BUILD_STANDALONE=ON` (activé par défaut sur macOS).
-Avec un modèle CoreML, chaque canal lance son propre thread d'inférence : 8 canaux = 8 × 375 inférences/s,
-à mesurer avec `bench_mask` avant de compter dessus.
+Contract (float32): input `features` [1,129] (power in dBFS per bin), optional `state_in` [1,S]; output `mask` [1,129]
+(gains 0..1), optional `state_out` [1,S]. `tools/train_mask.py` trains a small GRU mask network on speech plus noise and
+exports it to CoreML; `tools/bench_mask.cpp` checks that inference keeps up (≥ 95 % of the hops, one every 2.67 ms).
 
-## Porte vocale
+The shipped model was trained 4000 steps (about 22 minutes on Apple Silicon) on LibriSpeech dev-clean-2 with **synthetic**
+noise (white, pink, 50 Hz hum, filtered crowd noise). On similar clips it removes about 95 % of the magnitude error, with
+a 0.8 dB loss on clean voice. It has never seen real room noise, music or singing: it is a starting point, not a final model.
 
-Comme le plugin ne traite que la voix, une porte baisse le son quand personne ne parle (réglages « Porte vocale »
-et « Affaiblissement sans voix », 0 à 40 dB, 12 dB ; **éteinte par défaut**). Une fois par hop, `SpectralDenoiser` juge la bande
-vocale (~190 Hz à 3,9 kHz) : elle doit dépasser de 1,5 à 7,5 dB le plancher de bruit suivi, un rapport qui ne dépend pas du
-niveau d'entrée. Le masque du réseau n'a qu'une petite voix (un quart du score, jamais assez pour ouvrir la porte seul) :
-mesuré, le vrai modèle prend un bruit faible et stable pour du signal propre et répond « voix » dans 86 à 99 % des pauses.
-La porte s'ouvre aussitôt, attend 350 ms, puis se ferme en 200 ms avec une rampe sans
-clic. Elle n'ajoute aucune latence : le détecteur voit 5 ms d'avance sur la sortie. Fermer la porte baisse aussi le
-gain de boucle, donc les risques de larsen. Le voyant « VOIX / SILENCE » montre l'état.
+**Level handling.** Training speech peaked at −20…−1 dBFS, so the spectrum given to the model is lifted into that range
+(at most 40 dB, never above the noise floor + 12 dB). Its mask is a gain, which does not depend on the level it was
+computed at.
 
-Limite : un chant tenu très pur, ou une pause de plus d'une demi-seconde en pleine phrase, peut fermer la porte.
-Les silences courts entre deux mots ne la ferment pas (350 ms de maintien).
+## Tools
 
-## High CPU (latence zéro)
+| Tool | Purpose |
+|---|---|
+| `tools/train_mask.py` | Train and export the CoreML mask model (`--hidden`, `--layers`). |
+| `tools/make_installer.sh` | Build the `.pkg` installer (app, AU, VST3, model). |
+| `tools/plugin_probe/` | Load any VST3 as a black box and measure latency, level and behaviour in a howling loop. |
+| `tools/bench_mask.cpp` | Neural Engine inference benchmark. |
+| `tools/make_placeholder_model.py` | Random-weights model, **only to measure latency**. |
 
-Bouton « HIGH CPU » sous le curseur ciseau/cerveau (paramètre `highCpu`, éteint par défaut). Il supprime la latence du
-débruiteur : **5,3 ms éteint, 0 ms allumé** (le chiffre est sur le bouton et annoncé à l'hôte).
+## Limits
 
-Principe (`SpectralDenoiser::setZeroLatency`) : les gains sont toujours estimés sur les 256 derniers échantillons, au même
-rythme que le mode normal (un pas de 128), avec le même réseau. Mais au lieu de les appliquer dans le domaine fréquentiel
-(ce qui impose d'attendre une fenêtre), chaque jeu de gains devient un **filtre à phase minimale** de 160 coefficients
-(méthode du cepstre : logarithme du module, repliement, exponentielle) qui filtre directement les échantillons courants.
-Le retard propre du filtre mesuré est de 0 à 2 échantillons (0,04 ms). Le passage d'un filtre au suivant se fait en fondu
-sur un pas. Le coût est d'environ 320 multiplications par échantillon et par canal (15 millions par seconde) plus quelques
-FFT par pas.
+- Never run in a DAW with a real microphone and a real PA. The simulations use one or three resonances, TTS voices and
+  one channel. The AU has not been through `auval`.
+- Arm64 only (the Neural Engine path needs Apple Silicon). The installer is unsigned.
+- High CPU's phase behaviour has not been judged by ear, and it lets a little more howl through in very strong loops.
+- The neural model is small and trained on synthetic noise; it cannot tell faint noise from voice, which is why the gate
+  does not rely on it.
+- When the loop gain exceeds what the notches can fix, the optional brake lowers the voice too (16–30 dB in extreme cases)
+  and the flight log says how much to lower the volume. That is physics: the loop gain must get back below 1.
+- A single spurious learned notch can happen (about one in 2 minutes of speech): clear it and learn again.
+- The adaptive feedback canceller in `core/FeedbackCanceller` is **not wired into the plugin**: it works very well in simulation
+  but only learns with an audible probe noise, which "Learn the room" must not send. Notes and measurements: `NOTES.md`.
 
-Mesures sur de la parole synthétique (`say`) avec bruit rose ou blanc à −35..−45 dBFS, **rapport signal/bruit sur le
-module du spectre** (insensible à la phase) contre la parole propre, gain par rapport à l'entrée :
-
-| | mode normal | High CPU (latence 0) |
-|---|---|---|
-| avec le réseau (voix 1 / voix 2) | +5,2 / +5,2 dB | +5,2 / +5,4 dB |
-| classique seul | +3,0 / +4,6 dB | +2,6 / +4,2 dB |
-
-La qualité est donc équivalente au mode normal. Réserves, mesurées : (1) le SI-SDR, qui compare la forme d'onde, est plus
-bas (+1 dB au lieu de +3 dB avec le réseau) : un filtre à phase minimale décale la phase de chaque fréquence, comme n'importe
-quel égaliseur à phase minimale, sans changer le module ; ce décalage n'est pas capturé par nos mesures, il
-faut l'écouter ; (2) le larsen est un peu moins bien tenu en boucle très forte (+9,5 dB de gain de boucle : 0,13 à 0,16 s
-au-dessus de −6 dBFS sur 22 s dans 2 cas sur 8, contre 0 s en mode normal dans 7 cas sur 8) ; (3) la porte vocale décide
-un pas plus tard, le début d'un mot peut être rogné de moins de 3 ms.
-
-Essayé et abandonné (à ne pas refaire) : pas d'estimation plus petits (64, 32, 16, 8 échantillons) : de plus en plus mauvais
-(l'estimateur de bruit est calibré pour 128) ; 256 coefficients au lieu de 160 : aucun gain ; retarder le signal filtré pour
-aligner les gains : gain de moins d'un dB, donc la péremption des gains n'est pas la cause principale. L'ancien mode
-« fenêtre de 128 » (latence 2,7 ms) reste dans le code (`setLowLatency`), il est moins bon et n'est plus utilisé.
-
-## Aucune baisse de niveau automatique
-
-Consigne : le plugin ne doit jamais baisser le niveau de la voix de lui-même. Ce qui baissait le niveau, et ce qui a été fait :
-
-- **Porte vocale** : éteinte par défaut (elle reste disponible).
-- **Frein anti-larsen** (coupe tout le son quand un larsen dépasse les filtres) : bouton « FREIN », **éteint par défaut**
-  (`FeedbackSuppressor::setBrake`). Éteint, les filtres travaillent seuls et le niveau ne bouge jamais ; en salle très
-  instable un larsen peut dépasser la profondeur des filtres, il faut alors allumer le frein.
-- **Débruiteur neuronal** : il a été entraîné avec une parole dont la crête allait de −20 à −1 dBFS ; une voix plus faible
-  lui ressemblait à du bruit et il la baissait (mesuré : −3,2 dB à −35 dBFS, −8 dB à −45 dBFS). On remonte maintenant le spectre
-  donné au modèle jusqu'à cette plage (`nnLiftDb`, au plus 40 dB, jamais plus haut que le bruit + 12 dB) ; son masque est un
-  gain, il ne dépend pas du niveau auquel il a été calculé. Mesure sur le VST3 (gain appliqué à la parole seule, réglages par
-  défaut) : −0,6 à −1,4 dB de −15 à −45 dBFS.
-- **Aigus** : au-dessus de 3 kHz la réduction de bruit ne va qu'à la moitié de la profondeur réglée (en dB), pour préserver les
-  sifflantes. Contrepartie : un peu plus de souffle aigu résiduel.
-
-Reste environ 1 dB de baisse moyenne : c'est la réduction de bruit elle-même, dans les bandes où le bruit domine. Pour
-l'éviter, baisser le curseur central.
-
-## Bypass
-
-Le bouton rond (icône d'alimentation) en haut à droite coupe tout le traitement. Le son passe tel quel, retardé de la
-latence du plugin (256 échantillons, 0 en High CPU) pour rester aligné, avec un fondu de 10 ms : ni saut de timing ni clic. Le
-traitement continue en dessous, donc le retour est immédiat. Le bypass de l'hôte audio (AU/VST3) agit sur le même
-paramètre.
-
-## Automix (partage du gain entre les micros)
-
-Avec plusieurs canaux, un automixeur façon Dan Dugan partage le gain : la somme des carrés des gains vaut toujours
-un. Un seul orateur garde 0 dB et les autres micros descendent au plancher (réglable, 6 à 40 dB, 20 par défaut) ;
-deux orateurs égaux ont −3 dB chacun ; quand personne ne parle, les gains restent partagés (4 micros : −6 dB chacun),
-donc le nombre de micros ouverts n'ajoute ni bruit ni larsen. La puissance de chaque canal est pondérée par son score
-de voix (celui de la porte vocale) : un micro qui n'entend que du bruit ou la voix d'un voisin ne prend pas le gain.
-Ouverture en 10 ms, fermeture en 100 ms, détecteur 5 ms / 150 ms, gains figés en silence numérique, aucune latence.
-Les barres de la rangée « Automix » montrent le gain de chaque canal. Il faut au moins 2 canaux. Dans le standalone il
-est actif au premier lancement ; dans le plugin il est coupé par défaut (sur un bus stéréo L/R identique, il
-retirerait 3 dB à chaque côté). Code : `core/src/AutoMixer.cpp`, branché en fin de `processBlock`.
-
-## Modèle installé
-
-Un premier modèle est installé dans `~/Library/Application Support/VonDeLarsen/denoise.mlmodelc`. Il a été
-entraîné 4 000 pas (environ 22 min sur Apple Silicon) sur LibriSpeech dev-clean-2 (voix lues, 1 089 fichiers) avec
-du bruit **synthétique** (blanc, rose, ronflement 50 Hz, bruit de foule filtré). Sur des clips bruités de même
-nature, il réduit l'erreur de magnitude d'environ 95 % ; la voix propre perd 0,8 dB d'énergie. Il n'a jamais vu de
-vrai bruit de salle, de musique ni de chant : c'est un point de départ, pas un modèle final. Les fichiers
-d'entraînement sont copiés dans `~/Library/Application Support/VonDeLarsen/training/`.
-
-## Activer le Neural Engine
-
-1. Générer un modèle de test (poids aléatoires, **uniquement pour mesurer la latence**) :
-   `python tools/make_placeholder_model.py out/denoise.mlpackage`
-   puis le compiler : `xcrun coremlcompiler compile out/denoise.mlpackage out/` (nécessite Xcode complet), ou sans
-   Xcode : `coremltools.models.MLModel("out/denoise.mlpackage").get_compiled_model_path()` puis copier ce dossier.
-2. Mesurer : `./build/tests/bench_mask out/denoise.mlmodelc`. Le modèle doit traiter ≥ 95 % des hops
-   (un toutes les 2,67 ms). Sinon le masque est périmé et on retombe sur le Wiener.
-3. Pour l'utiliser dans le plugin, placer le modèle dans
-   `~/Library/Application Support/VonDeLarsen/denoise.mlmodelc`.
-
-Contrat du modèle (float32) : entrée `features` [1,129] (puissance en dBFS par bin), entrée optionnelle
-`state_in` [1,S], sortie `mask` [1,129] (gains 0..1), sortie optionnelle `state_out` [1,S].
-
-## Apprendre la salle (mode learn)
-
-Bouton « Apprendre la salle ». Pendant le réglage, **quelqu'un parle dans le micro** comme pendant le spectacle. Le gain de
-sortie monte doucement (0,5 dB/s, jusqu'à +18 dB), mais **seulement pendant que la voix est présente** : la chaîne n'est pas
-modifiée, donc la porte vocale et le débruiteur sont dans leurs conditions réelles et la voix excite la salle comme sur
-scène. Chaque larsen qui apparaît devient un **filtre permanent** (8 au plus) qui ne se relâche jamais et qui est sauvegardé
-avec le projet. La montée marque une pause de 2 s à chaque larsen trouvé, puis continue jusqu'à 6 dB au-dessus du dernier,
-et le gain revient à zéro en 2 s. Elle s'arrête d'elle-même si le signal devient trop chaud (au-dessus de −3 dBFS) ou après
-4 minutes. La bande de fréquences à droite montre les filtres : grands et clairs pour les filtres appris, courts et ternes
-pour ceux posés en direct. « Effacer » les retire.
-
-Mesuré avec de la vraie parole et la chaîne complète (modèle, porte, débruiteur) dans une salle simulée :
-
-| Salle | Durée | Résultat |
-|---|---|---|
-| Saine (gain de boucle −45 dB) | 34 s | aucun larsen, **aucun filtre appris** : la parole seule n'apprend rien |
-| Deux résonances (900 et 2 400 Hz) | 39 s | filtres à 861 Hz et 2 398 Hz (21 dB), plus un voisin à 2 618 Hz, marge de +10 dB |
-
-Limite : un faux filtre isolé peut arriver (la détection lente en fait environ un en 2 minutes de parole) : « Effacer » et
-recommencer.
-
-## Annuleur adaptatif de retour (expérimental, non branché)
-
-`FeedbackCanceller` (dans `core/`, testé, **non utilisé par le plugin**) : un filtre fréquentiel de 4 096 coefficients (85 ms,
-environ 1 % de processeur par canal) qui apprend comment ce qui sort des enceintes revient dans le micro à travers la salle et
-soustrait ce retour avant la chaîne. Mesuré en simulation, quand il est bien appris, il est très efficace : filtre à −50 dB de la
-vraie salle en boucle ouverte, retour annulé de 35 dB, boucle à +20 dB de gain sans larsen (−27 dBFS contre −0,4 dBFS pour le
-détecteur seul), 1 filtre étroit à poser au lieu de 8 sur un haut-parleur qui sature, voix intacte à −0,01 dB.
-
-**Je l'ai retiré du produit parce qu'il ne s'apprend pas sans bruit audible.** Il demande une excitation indépendante assez forte :
-10 s de bruit à −22 dBFS dans les enceintes donnent un filtre à −30 dB de la vraie salle, −25 dBFS à −25 dB, −35 dBFS à −15 dB,
-−45 dBFS à −5 dB. Avec la voix seule comme excitation, c'est faux : un filtre qui apprend en continu diverge (la voix ressemble à
-ce que le micro entend déjà, il apprend à la prédire à partir de sa propre sortie), et même en n'adaptant que dans les pauses
-et sans aucun bruit, il apprend une salle fausse (erreur +7,9 dB, pire que rien) et laisse le larsen s'installer 21 s sur un
-haut-parleur qui sature. Comme « Apprendre la salle » ne doit pas envoyer de bruit dans la sono, il n'y a plus de moyen propre de
-l'entraîner : le code reste pour qui accepterait une mesure au bruit.
-
-Aussi essayés et abandonnés pour « tout le plugin » : un recouvrement de 75 % du débruiteur (aucun gain : SNR 3,89 contre 3,94 dB
-avec le réseau, 3,27 contre 3,82 sans, pour le double de calcul), et un gros modèle neuronal à deux couches de 256 neurones
-(même erreur retirée que le petit : 96,4 / 95,6 / 95,6 % contre 96,5 / 95,6 / 95,4 %, avec des bruits d'entraînement synthétiques
-trop faciles pour juger ; `tools/train_mask.py` accepte `--hidden` et `--layers`, poids gardés dans
-`~/Library/Application Support/VonDeLarsen/training/hq/`). Le journal de bord affiche la charge processeur.
-
-## Temps de réaction au larsen
-
-Le but du plugin est d'envoyer très fort de la voix sans larsen. Le détecteur (`FeedbackSuppressor`) a trois étages,
-tous sans latence, et il n'agit que sur des preuves qui ne peuvent pas être de la voix :
-
-1. **Filtres notch** : analyse toutes les 2,7 ms. Un pic fort et stable pendant 21 ms, ou qui grandit encore au bout
-   de 27 ms, ouvre un filtre aussitôt à 12 dB, qui s'approfondit jusqu'à « Coupure max » (24 dB par défaut, jusqu'à
-   40). Un larsen qui saute dans une résonance large élargit le filtre voisin au lieu d'en consommer un autre
-   (12 filtres). Seuls comptent les pics à moins de 24 dB du plus fort du spectre.
-2. **Frein de gain** : un pic confirmé qui grandit encore coupe tout le son d'un coup, de la vitesse de montée plus
-   4 dB (6 à 30 dB). Il se relâche de 2 dB/s, jamais plus bas que ce que la boucle a montré qu'elle exige, et ce
-   plancher baisse à mesure que les filtres se creusent.
-3. **Garde-fou** : une entrée au-dessus de −6 dBFS pendant 80 ms ajoute 6 dB de frein par pas.
-
-**Faux déclenchements sur la parole réelle** (LibriSpeech, 41 phrases de locuteurs différents, 243 s, niveaux de 0,15
-à 0,6, dans la chaîne complète avec le modèle) : 0 filtre, 0 dB de frein. Sans le modèle : 2 filtres, 0 dB de frein.
-
-**Réaction sur des boucles dures simulées** (voix forte, haut-parleur qui sature, résonances larges Q 6, détecteur
-seul) : premier filtre en 140 à 310 ms, larsen audible (> −20 dBFS) pendant 150 à 290 ms, puis silence (−63 à −76
-dBFS), y compris à +20 dB. Cas extrême qui reste mal réglé : 4 résonances larges à +20 dB (résiduel à −30 dBFS). Avant
-la refonte : 4 800 ms audible et jamais éteint à +12 dB.
-
-**Dans la chaîne complète, sans voix**, ces mêmes boucles ne démarrent même plus : la porte vocale (−20 dB) et le
-débruiteur (−15 dB) retirent environ 35 dB de gain de boucle dès que personne ne parle. Le larsen ne peut naître que
-pendant que quelqu'un parle, et c'est là que les 150 à 300 ms ci-dessus s'appliquent.
-
-**Pourquoi pas plus vite ?** Un début de mot et la naissance d'un larsen se ressemblent pendant environ 30 ms : même
-bande dominante, même pente de montée, même facteur de crête. Mesuré sur de la vraie parole : pureté de raie, facteur
-de crête et pente ne les séparent pas ; le masque du réseau a une image de retard et décrit encore le silence au
-début d'un mot. Une voie rapide expérimentale (`setFastPath(true)`, croissance exponentielle régulière sur 27 ms)
-détecte le larsen en 25 à 40 ms mais ouvre 35 filtres inutiles en 243 s de parole : coupée. Une version moins stricte
-(6 images) en ouvrait 394 et coupait le son de 38 dB, ce qui donnait l'impression que « le volume baisse ».
-
-Limites : quand le gain de boucle dépasse ce que les filtres corrigent, le frein baisse aussi la voix (16 à 30 dB dans
-les cas extrêmes) et le journal affiche « Gain coupé de X dB : baissez un peu le volume ». C'est de la physique : il faut
-que le gain de boucle repasse sous 1. Le frein peut pomper une fois ou deux avant de trouver son plancher.
-
-**Annuleur adaptatif de retour : voir « Annuleur adaptatif de retour (expérimental, non branché) » plus haut.**
-
-Autre piste : décaleur de fréquence de quelques hertz (gagne 5 à 8 dB de gain avant larsen sans rien détecter).
-
-## État du projet
-
-Vérifié sur Linux et sur Mac : tout le cœur DSP (`core/`, `tests/`), la compilation de `CoreMlMaskProvider.mm`,
-du plugin (processeur et éditeur) et du standalone, l'entraînement et l'export CoreML, le benchmark Neural Engine.
-**Jamais exécuté** : le plugin AU/VST3 dans un hôte audio, et le standalone avec un vrai micro et des enceintes.
-
-À faire :
-- **Entraîner un vrai modèle de débruitage** (type DeepFilterNet/RNNoise réduit) respectant le contrat
-  ci-dessus. Aucun modèle n'est fourni ; sans lui, le plugin utilise le Wiener classique.
-- Mesurer le temps d'inférence réel sur ton Mac (`bench_mask`) et ajuster la taille du modèle.
-- Régler les seuils du détecteur de larsen sur de vrais enregistrements (chant tenu, parole forte).
-- Tester en conditions réelles avec micro + enceintes : les tests actuels simulent une seule résonance.
+Development notes (in French) with all experiments, including abandoned ones: [`NOTES.md`](NOTES.md).
