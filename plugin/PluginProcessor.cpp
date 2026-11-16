@@ -42,6 +42,7 @@ VonDeLarsenProcessor::VonDeLarsenProcessor()
     autoDepth_ = apvts.getRawParameterValue("autoMixDepth");
     gateDepth_ = apvts.getRawParameterValue("gateDepth");
     highCpu_ = apvts.getRawParameterValue("highCpu");
+    brake_ = apvts.getRawParameterValue("brake");
 }
 
 VonDeLarsenProcessor::~VonDeLarsenProcessor()
@@ -66,11 +67,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout VonDeLarsenProcessor::create
     l.add(std::make_unique<AudioParameterBool>(ParameterID { "nnEnable", 1 }, "Neural Engine mask", true));
     l.add(std::make_unique<AudioParameterFloat>(ParameterID { "nnMix", 1 }, "Neural share (0 = classic only)",
                                                 NormalisableRange<float>(0.f, 1.f), 0.7f));
-    l.add(std::make_unique<AudioParameterBool>(ParameterID { "gateOn", 1 }, "Voice gate", true));
+    l.add(std::make_unique<AudioParameterBool>(ParameterID { "gateOn", 1 }, "Voice gate", false));
     l.add(std::make_unique<AudioParameterFloat>(ParameterID { "gateDepth", 1 }, "Voice gate depth (dB)",
                                                 NormalisableRange<float>(0.f, 40.f, 1.f), 12.f));
     l.add(std::make_unique<AudioParameterBool>(ParameterID { "bypass", 1 }, "Bypass", false));
     l.add(std::make_unique<AudioParameterBool>(ParameterID { "highCpu", 1 }, "High CPU (low latency)", false));
+    l.add(std::make_unique<AudioParameterBool>(ParameterID { "brake", 1 }, "Howl brake (cuts all the sound)", false));
     l.add(std::make_unique<AudioParameterBool>(ParameterID { "autoMixOn", 1 }, "Automixer", false));
     l.add(std::make_unique<AudioParameterFloat>(ParameterID { "autoMixDepth", 1 }, "Automixer silent mic attenuation (dB)",
                                                 NormalisableRange<float>(6.f, 40.f, 1.f), 20.f));
@@ -95,11 +97,11 @@ void VonDeLarsenProcessor::prepareToPlay(double sr, int)
     fs_ = sr;
     const int n = active_.load();
     loadNeuralModel(n);
-    lowLatency_ = highCpu_->load() > 0.5f;
+    zeroLatency_ = highCpu_->load() > 0.5f;
     for (int i = 0; i < n; ++i) {
         auto& c = ch_[static_cast<size_t>(i)];
         c.feedback.prepare(sr);
-        c.denoiser.setLowLatency(lowLatency_);
+        c.denoiser.setZeroLatency(zeroLatency_);
         c.denoiser.prepare(sr);
     }
     mixer_.prepare(sr);
@@ -200,11 +202,11 @@ void VonDeLarsenProcessor::processBlock(juce::AudioBuffer<float>& buf, juce::Mid
     const int nCh = juce::jmin(buf.getNumChannels(), prepared_.load(std::memory_order_relaxed));
     flightSamples_.fetch_add(static_cast<std::uint64_t>(n), std::memory_order_relaxed);
 
-    // High CPU: a shorter analysis window halves the latency. Switching resets the denoisers (no allocation) and
+    // High CPU: the gains become a minimum-phase filter applied to the current samples, so the latency is 0. Switching resets the denoisers (no allocation) and
     // tells the host the new latency from the message thread.
-    if ((highCpu_->load() > 0.5f) != lowLatency_) {
-        lowLatency_ = !lowLatency_;
-        for (int c = 0; c < nCh; ++c) ch_[static_cast<size_t>(c)].denoiser.setLowLatency(lowLatency_);
+    if ((highCpu_->load() > 0.5f) != zeroLatency_) {
+        zeroLatency_ = !zeroLatency_;
+        for (int c = 0; c < nCh; ++c) ch_[static_cast<size_t>(c)].denoiser.setZeroLatency(zeroLatency_);
         if (nCh > 0) {
             bypassMix_.setLatency(ch_[0].denoiser.latencySamples());
             latencyNow_.store(ch_[0].denoiser.latencySamples());
@@ -246,6 +248,7 @@ void VonDeLarsenProcessor::processBlock(juce::AudioBuffer<float>& buf, juce::Mid
         auto& ch = ch_[static_cast<size_t>(c)];
         ch.feedback.setSensitivity(sens_->load());
         ch.feedback.setMaxCutDb(maxCut_->load());
+        ch.feedback.setBrake(brake_->load() > 0.5f); // off: the level never moves by itself, only the notches work
         ch.denoiser.setReductionDb(nr_->load());
         ch.denoiser.setMaskProvider(useNn ? ch.mask.get() : nullptr);
         ch.denoiser.setNeuralMix(mix_->load());

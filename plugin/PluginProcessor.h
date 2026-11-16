@@ -133,7 +133,8 @@ private:
     vc::AutoMixer mixer_;
     std::atomic<float>* gateDepth_ = nullptr;
     std::atomic<float>* highCpu_ = nullptr;
-    bool lowLatency_ = false; // audio thread: the mode the denoisers are in
+    std::atomic<float>* brake_ = nullptr;
+    bool zeroLatency_ = false; // audio thread: the mode the denoisers are in
     std::atomic<int> latencyNow_ { vc::SpectralDenoiser::kN };
     void handleAsyncUpdate() override { setLatencySamples(latencyNow_.load()); } // message thread
     double fs_ = 48000;

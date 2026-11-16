@@ -1,7 +1,9 @@
 // Developer tool: renders the editor to a PNG after feeding the processor a simulated howl, so the
 // flight-log numbers are alive. Usage: VonDeLarsenPreview out.png [help] [standalone] [bypass] [learn]   or   out.png icon
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <random>
 
 #include "PluginProcessor.h"
@@ -85,6 +87,31 @@ static int selfTest()
     std::normal_distribution<float> nd(0.f, 0.001f);
     juce::AudioBuffer<float> buf(1, blk);
     juce::MidiBuffer midi;
+    // VDL_VOICE=file.wav: someone speaks that recording (looped) instead of the synthetic voice
+    std::vector<float> speech;
+    if (const char* vf = std::getenv("VDL_VOICE")) {
+        std::ifstream f(vf, std::ios::binary); // 16-bit PCM WAV: walk the chunks to "data"
+        std::vector<char> b((std::istreambuf_iterator<char>(f)), {});
+        for (size_t i = 12; i + 8 < b.size();) {
+            std::uint32_t sz;
+            std::memcpy(&sz, &b[i + 4], 4);
+            if (!std::memcmp(&b[i], "data", 4)) {
+                std::vector<float> raw(sz / 2);
+                float pk = 1e-6f;
+                for (size_t k = 0; k < raw.size() && i + 8 + 2 * k + 1 < b.size(); ++k) {
+                    std::int16_t v;
+                    std::memcpy(&v, &b[i + 8 + 2 * k], 2);
+                    raw[k] = v / 32768.f;
+                    pk = std::max(pk, std::fabs(raw[k]));
+                }
+                for (float v : raw) speech.push_back(v * 0.15f / pk);
+                break;
+            }
+            i += 8 + sz + (sz & 1);
+        }
+    }
+    // VDL_LEVEL_DB=-20: the voice and the noise reach the input 20 dB lower (a quieter mic or a more distant speaker)
+    const float micGain = std::getenv("VDL_LEVEL_DB") ? std::pow(10.f, static_cast<float>(std::atof(std::getenv("VDL_LEVEL_DB"))) / 20.f) : 1.f;
     p.startLearn();
     double ph = 0;
     long t = 0;
@@ -93,13 +120,16 @@ static int selfTest()
         for (int i = 0; i < blk; ++i) {
             const double tt = static_cast<double>(t + i) / fs;
             float v = 0.f;
-            if (tt > 1.0 && std::fmod(tt, 1.0) < 0.6) { // someone speaks
+            if (!speech.empty()) {
+                const size_t idx = static_cast<size_t>(t + i) % (speech.size() + static_cast<size_t>(fs * 0.7)); // then 0.7 s of silence
+                if (tt > 1.0 && idx < speech.size()) v = speech[idx];
+            } else if (tt > 1.0 && std::fmod(tt, 1.0) < 0.6) { // someone speaks
                 ph += 6.283185307179586 * 160.0 * (1 + 0.02 * std::sin(6.283185307179586 * 5.5 * tt)) / fs;
                 double s = 0;
                 for (int h = 1; h <= 20; ++h) s += std::sin(h * ph) / h;
                 v = static_cast<float>(0.04 * s);
             }
-            float a = nd(rng) + v;
+            float a = (nd(rng) + v) * micGain; // the mic level changes, the room (speaker to mic) does not
             for (auto& m : room) a += m.process(spk[static_cast<size_t>(t + i)]);
             buf.setSample(0, i, a);
         }
@@ -107,6 +137,8 @@ static int selfTest()
         for (int i = 0; i < blk; ++i) spk[static_cast<size_t>(t + i + delay)] = std::clamp(buf.getSample(0, i), -1.f, 1.f);
         t += blk;
         const auto tm = p.telemetry();
+        if (std::getenv("VDL_TRACE") && t % static_cast<long>(fs * 2) < blk)
+            std::printf("  t=%5.1f s gain +%4.1f dB, phase %d, waiting %d, howls %d, guard %.1f dB, out peak %.2f\n", t / fs, tm.learnGainDb, tm.learnPhase, tm.learnWaiting, tm.learnHowls, tm.guardDb, std::fabs(buf.getMagnitude(0, 0, blk)));
         if (t > fs * 12 && tm.learnPhase == 0) break;
     }
     const auto tm = p.telemetry();
@@ -166,9 +198,9 @@ static int highCpuTest()
     set("highCpu", 1.f);
     run(200);
     juce::MessageManager::getInstance()->runDispatchLoopUntil(100); // the latency is announced from the message thread
-    const bool a128 = aligned(128, in.size() - 64 * 100);
+    const bool a128 = aligned(0, in.size() - 64 * 100);
     std::printf("normal: bypass aligned on 256 samples: %s\n", a256 ? "yes" : "NO");
-    std::printf("high cpu: latency %d samples, bypass aligned on 128 samples: %s\n", p.getLatencySamples(), a128 ? "yes" : "NO");
+    std::printf("high cpu: latency %d samples, bypass aligned on 0 samples: %s\n", p.getLatencySamples(), a128 ? "yes" : "NO");
     set("highCpu", 0.f);
     run(200);
     juce::MessageManager::getInstance()->runDispatchLoopUntil(100);
@@ -182,6 +214,52 @@ static int highCpuTest()
     return 0;
 }
 
+// Developer self-test of the learn button: click it in the real editor, feed audio, see whether the processor starts.
+// Usage: VonDeLarsenPreview x uilearn
+static juce::Component* findById(juce::Component* c, const juce::String& id)
+{
+    if (c->getComponentID() == id) return c;
+    for (auto* ch : c->getChildren())
+        if (auto* r = findById(ch, id)) return r;
+    return nullptr;
+}
+
+static int uiLearnTest()
+{
+    VonDeLarsenProcessor p;
+    constexpr double fs = 48000;
+    constexpr int blk = 64;
+    p.setActiveChannels(2);
+    p.setPlayConfigDetails(2, 2, fs, blk);
+    p.setRateAndBufferSizeDetails(fs, blk);
+    p.prepareToPlay(fs, blk);
+    std::unique_ptr<juce::AudioProcessorEditor> ed(p.createEditor());
+    ed->setSize(720, 810);
+    auto* learn = dynamic_cast<juce::Button*>(findById(ed.get(), "learn"));
+    std::printf("learn button found: %s, showing: %s, enabled: %s\n", learn ? "yes" : "NO", learn && learn->isShowing() ? "yes" : "no", learn && learn->isEnabled() ? "yes" : "no");
+    if (!learn) return 1;
+    juce::AudioBuffer<float> buf(2, blk);
+    juce::MidiBuffer midi;
+    std::mt19937 rng(3);
+    std::normal_distribution<float> nd(0.f, 0.003f);
+    auto blocks = [&](int n) {
+        for (int b = 0; b < n; ++b) {
+            for (int c = 0; c < 2; ++c) for (int i = 0; i < blk; ++i) buf.setSample(c, i, nd(rng));
+            p.processBlock(buf, midi);
+        }
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(30);
+    };
+    blocks(50);
+    learn->triggerClick();
+    blocks(10);
+    std::printf("after triggerClick: learning %d\n", p.telemetry().learning);
+    if (learn->onClick) learn->onClick();
+    blocks(50);
+    const auto t = p.telemetry();
+    std::printf("after click: learning %d, phase %d, waiting for voice %d, result %d\n", t.learning, t.learnPhase, t.learnWaiting, t.learnResult);
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI init;
@@ -189,6 +267,7 @@ int main(int argc, char** argv)
     if (argc > 2 && juce::String(argv[2]) == "icon") { renderIcon(juce::File(out)); return 0; }
     if (argc > 2 && juce::String(argv[2]) == "selftest") return selfTest();
     if (argc > 2 && juce::String(argv[2]) == "highcpu") return highCpuTest();
+    if (argc > 2 && juce::String(argv[2]) == "uilearn") return uiLearnTest();
     bool help = false, standalone = false, bypass = false, learn = false;
     for (int i = 2; i < argc; ++i) {
         help = help || juce::String(argv[i]) == "help";

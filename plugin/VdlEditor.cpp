@@ -55,14 +55,14 @@ struct HelpEntry { const char* title; const char* body; };
 const HelpEntry kHelp[] = {
     { "RÉDUCTION DE BRUIT", "Combien le bruit de fond baisse (public, ventilation, souffle), de 0 à 30 dB. Plus la fusée penche, plus la flamme grandit. Trop haut, la voix devient creuse : montez par petits pas." },
     { "SENSIBILITÉ", "Vitesse à laquelle le détecteur crie « larsen ! ». Haut : il réagit tôt, mais peut confondre une note tenue très pure. Bas : il attend que le sifflement s'installe." },
-    { "COUPURE MAX", "Profondeur maximale de chaque filtre anti-larsen, de 6 à 40 dB. Si le larsen est trop fort pour les filtres, un frein coupe tout le son d'un coup, et le journal dit de combien baisser le volume." },
+    { "COUPURE MAX", "Profondeur maximale de chaque filtre anti-larsen, de 6 à 40 dB. Au-delà, voir FREIN." },
     { "CISEAU OU CERVEAU", "Méthode de débruitage. Ciseau : calcul classique, prévisible. Cerveau : réseau neuronal, plus fin sur la voix. Au milieu, on mélange. Sans modèle installé, seul le ciseau travaille." },
     { "MASQUE NEURONAL", "Active ou coupe le réseau neuronal. Coupé, le ciseau travaille seul et le réseau ne guide plus le détecteur de larsen. La latence ne change pas." },
-    { "HIGH CPU", "Fenêtre d'analyse divisée par deux : latence de 5,3 à 2,7 ms (affichée sur le bouton), pour 4 fois plus de calcul. Débruitage un peu moins fin, surtout côté ciseau. Le détecteur de larsen n'est pas concerné." },
+    { "HIGH CPU", "Latence zéro : le débruiteur ne retarde plus le son (5,3 ms éteint, 0 ms allumé, chiffre sur le bouton). Les gains sont appliqués par un filtre calculé en continu. Qualité mesurée équivalente, un peu plus de calcul. Le détecteur de larsen n'est pas concerné." },
+    { "FREIN", "Éteint par défaut : le plugin ne baisse jamais le niveau de lui-même. Allumé, si un larsen dépasse la profondeur des filtres, un frein coupe tout le son d'un coup (le journal dit de combien baisser le volume). À allumer si la salle est très instable." },
     { "PORTE VOCALE", "Quand personne ne parle, la porte baisse le son du montant du curseur (0 à 40 dB), ce qui limite aussi le larsen. Elle s'ouvre aussitôt, attend 0,35 s, se ferme en 0,2 s. Voyant : VOIX ou SILENCE." },
     { "AUTOMIX", "Plusieurs micros, un seul gain à partager : celui qui parle prend la place des autres, comme un automixeur Dugan. Le curseur règle la baisse des micros silencieux. Les barres montrent le gain de chaque canal." },
-    { "LARSENS ÉVITÉS", "Nombre de fois où une fréquence qui sifflait a été attrapée par un filtre. Un larsen qui revient après 10 s de calme compte pour un nouveau." },
-    { "TEMPS ÉVITÉ", "Durée cumulée pendant laquelle au moins un filtre retenait un larsen. C'est le temps pendant lequel la salle aurait sifflé sans le plugin." },
+    { "LARSENS ET TEMPS ÉVITÉS", "Nombre de fois où un filtre a attrapé une fréquence qui sifflait (un larsen qui revient après 10 s de calme compte pour un nouveau), et temps cumulé pendant lequel au moins un filtre en retenait un." },
     { "ALTITUDE", "Fantaisie de bord : 50 m d'altitude par dB de coupure appliqué en ce moment. Un gros larsen, une grosse altitude. Le plafond atteint est gardé." },
     { "TEMPS DE VOL", "Durée de traitement audio, sauvegardée avec le projet. La fusée avance à 11,2 km/s sur la barre Terre-Lune : compter 9 h 30 de vol pour arriver." },
     { "APPRENDRE LA SALLE", "Quelqu'un parle dans le micro. Le gain monte doucement, seulement pendant que vous parlez, jusqu'à faire siffler la salle. Chaque larsen trouvé devient un filtre permanent, gardé avec le projet. EFFACER les retire." },
@@ -149,9 +149,12 @@ public:
         mix_.setTextBoxStyle(Slider::NoTextBox, true, 0, 0);
         addAndMakeVisible(mix_);
         addAndMakeVisible(neural_);
-        neural_.setButtonText("MASQUE NEURONAL");
+        neural_.setButtonText("NEURONAL");
         addAndMakeVisible(highCpu_);
         highCpu_.setComponentID("cpu");
+        addAndMakeVisible(brake_);
+        brake_.setButtonText("FREIN");
+        brake_.setComponentID("brake");
 
         addAndMakeVisible(learn_);
         learn_.setButtonText("APPRENDRE LA SALLE");
@@ -186,6 +189,7 @@ public:
         mixA_ = std::make_unique<SA>(proc_.apvts, "nnMix", mix_);
         neuralA_ = std::make_unique<BA>(proc_.apvts, "nnEnable", neural_);
         highCpuA_ = std::make_unique<BA>(proc_.apvts, "highCpu", highCpu_);
+        brakeA_ = std::make_unique<BA>(proc_.apvts, "brake", brake_);
         highCpu_.onStateChange = [this] { updateCpuText(); };
         updateCpuText();
         gateA_ = std::make_unique<BA>(proc_.apvts, "gateOn", gate_);
@@ -204,7 +208,8 @@ public:
         cut_.setTooltip(T("Coupure max : profondeur maximale de chaque filtre anti-larsen."));
         mix_.setTooltip(T("Ciseau (calcul classique) à gauche, cerveau (réseau neuronal) à droite."));
         neural_.setTooltip(T("Active ou coupe le réseau neuronal."));
-        highCpu_.setTooltip(T("High CPU : fenêtre d'analyse plus courte, latence divisée par deux, plus de calcul."));
+        brake_.setTooltip(T("Frein : si le larsen dépasse les filtres, coupe tout le son d'un coup. Éteint : le niveau ne bouge jamais tout seul."));
+        highCpu_.setTooltip(T("High CPU : latence zéro, un peu plus de calcul."));
         mix_.onValueChange = [this] { repaint(); };
         depth_.setTooltip(T("Affaiblissement sans voix : de combien le son baisse quand la porte est fermée."));
         gate_.setTooltip(T("Porte vocale : baisse le son quand personne ne parle."));
@@ -272,8 +277,9 @@ public:
         sens_.setBounds(48, 170, 124, 158);
         cut_.setBounds(548, 170, 124, 158);
         mix_.setBounds(139, 404, 442, 56);
-        neural_.setBounds(50, 478, 300, 28);
-        highCpu_.setBounds(370, 478, 300, 28);
+        neural_.setBounds(34, 478, 200, 28);
+        highCpu_.setBounds(242, 478, 250, 28);
+        brake_.setBounds(500, 478, 170, 28);
         gate_.setBounds(34, 512, 250, 28);
         autoOn_.setBounds(34, 562, 250, 28);
         autoDepth_.setBounds(296, 562, 200, 28);
@@ -361,6 +367,7 @@ private:
         for (auto* b : { &chMinus_, &chPlus_, &audio_ }) b->setVisible(standalone && !open);
         gate_.setVisible(!open);
         highCpu_.setVisible(!open);
+        brake_.setVisible(!open);
         depth_.setVisible(!open);
         autoOn_.setVisible(!open);
         autoDepth_.setVisible(!open);
@@ -382,7 +389,7 @@ private:
     {
         const double sr = proc_.getSampleRate() > 0 ? proc_.getSampleRate() : 48000.0;
         const bool on = highCpu_.getToggleState();
-        const int smp = on ? vc::SpectralDenoiser::kN / 2 : vc::SpectralDenoiser::kN;
+        const int smp = on ? 0 : vc::SpectralDenoiser::kN;
         highCpu_.setButtonText("HIGH CPU " + String(smp * 1000.0 / sr, 1).replace(".", ",") + " MS");
     }
 
@@ -392,7 +399,7 @@ private:
         const bool loaded = proc_.neuralModelLoaded();
         if (loaded != neuralLoaded_) { // say so when no model was found: the brain side then does nothing
             neuralLoaded_ = loaded;
-            neural_.setButtonText(loaded ? T("MASQUE NEURONAL") : T("NEURONAL : MODÈLE ABSENT"));
+            neural_.setButtonText(loaded ? T("NEURONAL") : T("NEURONAL ABSENT"));
         }
         repaint(34, 12, 652, 26);
         repaint(34, 506, 652, 310);
@@ -568,12 +575,12 @@ private:
 
     VonDeLarsenProcessor& proc_;
     Slider noise_, sens_, cut_, mix_;
-    ToggleButton neural_, highCpu_, gate_, autoOn_, bypass_, learn_;
+    ToggleButton neural_, highCpu_, brake_, gate_, autoOn_, bypass_, learn_;
     Slider depth_, autoDepth_;
     TextButton help_ { "?" }, reset_ { "VIDER" }, clearLearn_ { "EFFACER" }, chMinus_ { "-" }, chPlus_ { "+" }, audio_ { "AUDIO" };
     HelpOverlay overlay_;
     std::unique_ptr<SA> noiseA_, sensA_, cutA_, mixA_;
-    std::unique_ptr<BA> neuralA_, highCpuA_, gateA_, autoOnA_, bypassA_;
+    std::unique_ptr<BA> neuralA_, highCpuA_, brakeA_, gateA_, autoOnA_, bypassA_;
     std::unique_ptr<SA> depthA_, autoDepthA_;
     VonDeLarsenProcessor::Telemetry tm_;
     bool neuralLoaded_ = true;
